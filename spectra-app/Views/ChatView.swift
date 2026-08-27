@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 import SpectraCore
 import ThinkingOrbsKit
 
@@ -7,6 +8,7 @@ import ThinkingOrbsKit
 struct ChatView: View {
     @Environment(AppState.self) private var app
     @State private var draft = ""
+    @State private var pickerItem: PhotosPickerItem?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -105,7 +107,19 @@ struct ChatView: View {
     private func inputBar(_ session: ProfileSession) -> some View {
         VStack(spacing: 0) {
             Hairline()
+            if let a = session.pendingAttachment {
+                pendingStrip(a, session)
+            }
             HStack(spacing: 12) {
+                PhotosPicker(selection: $pickerItem, matching: .images) {
+                    Image(systemName: "paperclip")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(Theme.muted)
+                        .frame(width: 40, height: 40)
+                }
+                .accessibilityLabel("Attach image")
+                .disabled(!session.canSend)
+
                 TextField("", text: $draft, prompt:
                     Text("Message \(session.profile.name)…").foregroundStyle(Theme.muted),
                     axis: .vertical)
@@ -118,7 +132,7 @@ struct ChatView: View {
 
                 Button {
                     let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !text.isEmpty else { return }
+                    guard canSend(session) else { return }
                     draft = ""
                     Task { await session.send(text) }
                 } label: {
@@ -134,15 +148,45 @@ struct ChatView: View {
             }
             .padding(.horizontal, 16).padding(.vertical, 12)
         }
+        .onChange(of: pickerItem) { _, item in
+            guard let item else { return }
+            Task {
+                defer { pickerItem = nil }
+                guard let raw = try? await item.loadTransferable(type: Data.self),
+                      let ui = UIImage(data: raw) else { return }
+                await app.attachImage(profileName: session.profile.name,
+                                      imageData: ui.jpeg(maxDim: 1600, quality: 0.8),
+                                      thumbnail: ui.jpeg(maxDim: 240, quality: 0.7))
+            }
+        }
+    }
+
+    private func pendingStrip(_ a: Message.Attachment, _ session: ProfileSession) -> some View {
+        HStack(spacing: 10) {
+            if let img = UIImage(data: a.thumbnailJPEG) {
+                Image(uiImage: img).resizable().scaledToFill()
+                    .frame(width: 44, height: 44)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+            Text(a.name).font(Theme.mono(11)).foregroundStyle(Theme.muted).lineLimit(1)
+            Spacer()
+            Button { session.setPendingAttachment(nil) } label: {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.muted)
+            }.accessibilityLabel("Remove attachment")
+        }
+        .padding(.horizontal, 16).padding(.top, 10)
     }
 
     private func canSend(_ session: ProfileSession) -> Bool {
-        session.canSend && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        session.canSend &&
+        (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+         || session.pendingAttachment != nil)   // image-only send allowed
     }
 }
 
 struct MessageRow: View {
     let message: SpectraCore.Message
+    @State private var showFullImage = false
 
     var body: some View {
         switch message.kind {
@@ -174,12 +218,26 @@ struct MessageRow: View {
 
         case .plain:
             if message.role == .user {
-                Text(message.text)
-                    .font(Theme.mono(14))
-                    .foregroundStyle(Theme.paper)
-                    .padding(.vertical, 10).padding(.horizontal, 14)
-                    .background(Theme.ink, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+                VStack(alignment: .trailing, spacing: 6) {
+                    if let a = message.attachment, let img = UIImage(data: a.thumbnailJPEG) {
+                        Image(uiImage: img).resizable().scaledToFill()
+                            .frame(maxWidth: 200, maxHeight: 200)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .onTapGesture { showFullImage = true }
+                            .accessibilityLabel("Attached image \(a.name). Tap to view full screen.")
+                            .fullScreenCover(isPresented: $showFullImage) {
+                                ImageViewer(data: a.thumbnailJPEG)
+                            }
+                    }
+                    if !message.text.isEmpty {
+                        Text(message.text)
+                            .font(Theme.mono(14))
+                            .foregroundStyle(Theme.paper)
+                            .padding(.vertical, 10).padding(.horizontal, 14)
+                            .background(Theme.ink, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
             } else {
                 // Agent: plain mono (spec §9), thin accent rule for identity.
                 HStack(alignment: .top, spacing: 12) {
@@ -281,5 +339,39 @@ struct ClarifyCard: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
             .strokeBorder(Theme.hairline, lineWidth: 1))
+    }
+}
+
+/// Full-screen image viewer (§9: tap thumbnail → view full-screen). Renders the
+/// locally-held JPEG; the server-side original isn't fetchable over the wire.
+private struct ImageViewer: View {
+    let data: Data
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+            if let img = UIImage(data: data) {
+                Image(uiImage: img).resizable().scaledToFit().ignoresSafeArea()
+            }
+            Button { dismiss() } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title).foregroundStyle(.white.opacity(0.9))
+                    .padding()
+            }.accessibilityLabel("Close")
+        }
+    }
+}
+
+private extension UIImage {
+    /// Downscale so the longest side ≤ maxDim, then JPEG-encode. Keeps uploads
+    /// and persisted thumbnails small. ponytail: nearest-neighbour-free UIKit resize.
+    func jpeg(maxDim: CGFloat, quality: CGFloat) -> Data {
+        let longest = max(size.width, size.height)
+        let scale = longest > maxDim ? maxDim / longest : 1
+        let target = CGSize(width: size.width * scale, height: size.height * scale)
+        let out = UIGraphicsImageRenderer(size: target).image { _ in
+            draw(in: CGRect(origin: .zero, size: target))
+        }
+        return out.jpegData(compressionQuality: quality) ?? Data()
     }
 }

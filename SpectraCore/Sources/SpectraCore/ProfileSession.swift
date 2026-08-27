@@ -16,6 +16,9 @@ public final class ProfileSession: Identifiable {
     public private(set) var pendingClarify: ClarifyRequest?     // soft — thread stays live
     public private(set) var serverSessionID: String?
     public private(set) var lastError: String?
+    /// Image staged on the server (via image.attach) waiting to ride the next
+    /// send() as an inline thumbnail on the user's message (§9).
+    public private(set) var pendingAttachment: Message.Attachment?
 
     private let rpc: HermesRPCConnection
     private var streamingMessageID: String?
@@ -50,6 +53,7 @@ public final class ProfileSession: Identifiable {
         streamingMessageID = nil
         pendingApproval = nil
         pendingClarify = nil
+        pendingAttachment = nil     // staging died with the session
         status = .idle
     }
 
@@ -57,12 +61,19 @@ public final class ProfileSession: Identifiable {
 
     public var canSend: Bool { pendingApproval == nil }
 
+    public func setPendingAttachment(_ a: Message.Attachment?) { pendingAttachment = a }
+    public func noteError(_ text: String) { lastError = text; status = .alert }
+
     public func send(_ text: String) async {
         guard pendingApproval == nil else { return }  // hard block at model layer
+        // Image already staged server-side via image.attach; ride it on this message.
+        let attach = pendingAttachment
+        guard !text.isEmpty || attach != nil else { return }
         do {
             try await ensureSession()
             guard let sid = serverSessionID else { return }
-            messages.append(Message(role: .user, text: text))
+            messages.append(Message(role: .user, text: text, attachment: attach))
+            pendingAttachment = nil
             _ = try await rpc.call("prompt.submit", params: ["session_id": sid, "text": text])
             status = .thinking(search: false)
         } catch {

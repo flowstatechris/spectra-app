@@ -210,6 +210,28 @@ public final class AppState {
         Persistence.save(snap)
     }
 
+    // MARK: Attachments (spec §9 / §2.6)
+
+    /// Upload an image, stage it on the session via image.attach, and hold a
+    /// thumbnail for the next send(). `imageData` is the full JPEG for upload;
+    /// `thumbnail` is a small JPEG for inline display.
+    public func attachImage(profileName: String, imageData: Data, thumbnail: Data,
+                            mime: String = "image/jpeg", filename: String = "photo.jpg") async {
+        guard let session = sessions[profileName], let auth, let rpc, let backend else { return }
+        do {
+            try await session.ensureSession()
+            guard let sid = session.serverSessionID else { return }
+            let token = try await auth.validAccessToken()
+            let path = try await Attachments.upload(baseURL: backend.baseURL, token: token,
+                        profile: profileName, data: imageData, filename: filename, mime: mime)
+            _ = try await rpc.call("image.attach", params: ["session_id": sid, "path": path])
+            session.setPendingAttachment(.init(name: (path as NSString).lastPathComponent,
+                                               thumbnailJPEG: thumbnail))
+        } catch {
+            session.noteError("Couldn't attach image")
+        }
+    }
+
     // MARK: Refresh (spec §6: one shared refresh path)
 
     public func refreshAll() async {

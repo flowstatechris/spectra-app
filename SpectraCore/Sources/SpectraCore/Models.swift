@@ -51,16 +51,30 @@ public struct Message: Identifiable, Sendable, Equatable, Codable {
         case approvalResolved(choice: String)  // green receipt (spec §8)
     }
 
+    /// A sent image (§9). The uploaded file lives at a server-local path we
+    /// can't fetch, so we keep a small downscaled JPEG to render inline. `name`
+    /// is the server filename for reference.
+    public struct Attachment: Sendable, Equatable, Codable {
+        public let name: String
+        public let thumbnailJPEG: Data
+        public init(name: String, thumbnailJPEG: Data) {
+            self.name = name; self.thumbnailJPEG = thumbnailJPEG
+        }
+    }
+
     public let id: String
     public let role: Role
     public var text: String
     public var kind: Kind
+    public var attachment: Attachment?
 
-    public init(id: String = UUID().uuidString, role: Role, text: String, kind: Kind = .plain) {
+    public init(id: String = UUID().uuidString, role: Role, text: String,
+                kind: Kind = .plain, attachment: Attachment? = nil) {
         self.id = id
         self.role = role
         self.text = text
         self.kind = kind
+        self.attachment = attachment
     }
 }
 
