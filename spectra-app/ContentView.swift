@@ -23,7 +23,11 @@ struct ContentView: View {
         .preferredColorScheme(Appearance(rawValue: appearanceRaw)?.scheme)
         .task { await app.restoreOnLaunch() }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await app.refreshAll() } }
+            switch phase {
+            case .active: Task { await app.refreshAll() }
+            case .inactive, .background: app.persist()  // flush unsent-reply state
+            @unknown default: break
+            }
         }
     }
 

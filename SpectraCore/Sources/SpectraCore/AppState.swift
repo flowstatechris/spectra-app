@@ -48,18 +48,41 @@ public final class AppState {
         phase = .needsLogin
     }
 
-    /// Try silent restore from Keychain; falls back to `.needsLogin`.
+    /// Instant cold-launch (spec §10): paint cached backend + profiles +
+    /// message history synchronously, then reconnect in the background. If the
+    /// keychain restore fails (tokens revoked), fall back to re-login.
     public func restoreOnLaunch() async {
-        guard let auth else { return }
-        phase = .loggingIn
+        hydrateFromCache()                  // synchronous: may set phase=.ready
+        guard let auth else { phase = .needsBackend; return }
         do {
             _ = try await auth.restore()
-            try await connectRPC()
-            try await loadProfiles()
-            phase = sessions.isEmpty ? .pickingProfiles : .ready
+            try await connectRPC()          // connects the hydrated rpc (or a fresh one)
+            try await loadProfiles()        // refresh live metadata
+            if sessions.isEmpty { phase = .pickingProfiles }
+            // else: keep the .ready we already painted from cache
         } catch {
-            phase = .needsLogin
+            phase = .needsLogin             // can't reach backend; re-auth
         }
+    }
+
+    /// Rebuild backend, connection, and ProfileSessions from disk — no network.
+    /// Runs before any await so the first frame shows the last session.
+    private func hydrateFromCache() {
+        guard let snap = Persistence.load() else { return }
+        let config = BackendConfig(baseURL: snap.backendURL)
+        backend = config
+        let auth = HermesAuthClient(backend: config)
+        self.auth = auth
+        let connection = HermesRPCConnection(auth: auth)
+        rpc = connection
+        availableProfiles = snap.sessions.map(\.profile)
+        for name in snap.order {
+            guard let cached = snap.sessions.first(where: { $0.profile.name == name }) else { continue }
+            sessions[name] = ProfileSession(profile: cached.profile, rpc: connection,
+                                            restoring: cached.messages)
+        }
+        activeProfileName = snap.activeProfileName ?? sessions.keys.sorted().first
+        if !sessions.isEmpty { phase = .ready }
     }
 
     /// Begin interactive login. Returns the URL to open in the system browser;
@@ -81,7 +104,7 @@ public final class AppState {
 
     private func connectRPC() async throws {
         guard let auth else { return }
-        let connection = HermesRPCConnection(auth: auth)
+        let connection = rpc ?? HermesRPCConnection(auth: auth)  // reuse hydrated one
         rpc = connection
         try await connection.connect()
         startEventRouter(connection)
@@ -106,11 +129,35 @@ public final class AppState {
         }
         if activeProfileName == nil { activeProfileName = names.first }
         if !sessions.isEmpty { phase = .ready }
+        persist()
     }
 
     public func removeProfile(_ name: String) {
         sessions.removeValue(forKey: name)
         if activeProfileName == name { activeProfileName = sessions.keys.sorted().first }
+        persist()
+    }
+
+    // MARK: Persistence (spec §10)
+
+    /// Snapshot backend + added profiles + message history to disk. Cheap
+    /// enough to call on save-worthy events; NOT called per message.delta.
+    public func persist() {
+        guard let backend else { return }
+        // Active profile first so it re-opens on top; rest alphabetical.
+        // ponytail: no add-order tracking — dict loses it; deterministic is enough.
+        var order = sessions.keys.sorted()
+        if let active = activeProfileName, let i = order.firstIndex(of: active) {
+            order.remove(at: i); order.insert(active, at: 0)
+        }
+        let snap = PersistedState(
+            backendURL: backend.baseURL,
+            activeProfileName: activeProfileName,
+            order: order,
+            sessions: order.compactMap { name in
+                sessions[name].map { PersistedState.Session(profile: $0.profile, messages: $0.messages) }
+            })
+        Persistence.save(snap)
     }
 
     // MARK: Refresh (spec §6: one shared refresh path)
@@ -134,6 +181,8 @@ public final class AppState {
                 if let session = sessions.values.first(where: { $0.serverSessionID == event.sessionID }) {
                     session.handle(event)
                     recordActivity(profileName: session.profile.name, event: event)
+                    // Persist on turn boundaries only — not per message.delta.
+                    if Self.persistTriggers.contains(event.type) { persist() }
                 }
             }
         }
@@ -151,6 +200,8 @@ public final class AppState {
     // MARK: Activity feed (Tasks tab)
 
     private static let feedCap = 200
+    private static let persistTriggers: Set<String> =
+        ["message.complete", "approval.request", "clarify.request", "turn.error"]
 
     /// Fold tool/turn events into the cross-profile feed. Linear scan on
     /// completion (feed is capped at 200 — swap for a tool_id index only if
@@ -196,6 +247,7 @@ public final class AppState {
     public func logout() async {
         await rpc?.disconnect()
         await auth?.logout()
+        Persistence.clear()
         eventRouter?.cancel()
         stateWatcher?.cancel()
         sessions = [:]

@@ -14,7 +14,7 @@ public struct BackendConfig: Identifiable, Codable, Hashable, Sendable {
 
 /// Rich per-profile metadata from `profiles.list` over RPC (reachable over
 /// /api/ws even though the REST surface only exposes names — ADR-0002).
-public struct ProfileInfo: Identifiable, Sendable, Hashable {
+public struct ProfileInfo: Identifiable, Sendable, Hashable, Codable {
     public let name: String
     public let isDefault: Bool
     public let model: String
@@ -43,9 +43,9 @@ public enum SessionStatus: Equatable, Sendable {
     case alert                    // error state
 }
 
-public struct Message: Identifiable, Sendable, Equatable {
-    public enum Role: String, Sendable { case user, agent }
-    public enum Kind: Equatable, Sendable {
+public struct Message: Identifiable, Sendable, Equatable, Codable {
+    public enum Role: String, Sendable, Codable { case user, agent }
+    public enum Kind: Equatable, Sendable, Codable {
         case plain
         case status                 // lifecycle/status lines, quieter render
         case approvalResolved(choice: String)  // green receipt (spec §8)

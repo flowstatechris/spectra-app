@@ -20,9 +20,13 @@ public final class ProfileSession: Identifiable {
     private let rpc: HermesRPCConnection
     private var streamingMessageID: String?
 
-    public init(profile: ProfileInfo, rpc: HermesRPCConnection) {
+    public init(profile: ProfileInfo, rpc: HermesRPCConnection,
+                restoring messages: [Message] = []) {
         self.profile = profile
         self.rpc = rpc
+        self.messages = messages
+        // serverSessionID stays nil on restore: the cached thread is display-
+        // only; first send() opens a fresh server session. (see Persistence.swift)
     }
 
     // MARK: Session lifecycle
