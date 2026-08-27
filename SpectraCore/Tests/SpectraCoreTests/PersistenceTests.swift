@@ -50,6 +50,24 @@ final class PersistenceTests: XCTestCase {
         } else { XCTFail("approvalResolved kind lost in round-trip") }
     }
 
+    /// The Activity feed round-trips (Codable status enum + Date), so it can
+    /// survive a cold launch (handoff §5).
+    func testActivityFeedRoundTrip() throws {
+        let feed = [
+            ActivityItem(id: "t1", profileName: "default", toolName: "terminal",
+                         context: "swift test", status: .success,
+                         startedAt: Date(timeIntervalSince1970: 1_800_000_000), duration: 4.8),
+            ActivityItem(id: "approval:a1", profileName: "default", toolName: "approval",
+                         context: "rm -rf build", status: .inReview),
+        ]
+        let state = PersistedState(
+            backendURL: URL(string: "http://x")!, activeProfileName: nil,
+            order: [], sessions: [], activity: feed)
+        let back = try JSONDecoder().decode(
+            PersistedState.self, from: try JSONEncoder().encode(state))
+        XCTAssertEqual(back.activity, feed)
+    }
+
     /// Invariant: the snapshot has no place to store a server session id — it's
     /// display-only continuity (gateway reaps orphaned sessions on disconnect).
     func testNoServerSessionIDPersisted() throws {

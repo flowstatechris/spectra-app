@@ -16,6 +16,7 @@ public struct PersistedState: Codable, Sendable {
     public var activeProfileName: String?
     public var order: [String]          // profile add order
     public var sessions: [Session]
+    public var activity: [ActivityItem]?   // optional: old snapshots decode fine
 }
 
 public enum Persistence {

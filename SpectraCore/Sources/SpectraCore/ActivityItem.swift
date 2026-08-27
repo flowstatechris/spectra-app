@@ -2,8 +2,8 @@ import Foundation
 
 /// One tool/turn activity across any profile — the Activity feed (spec §13).
 /// Keyed on the server's tool_id so tool.start → tool.complete flips in place.
-public struct ActivityItem: Identifiable, Sendable, Equatable {
-    public enum Status: String, Sendable {
+public struct ActivityItem: Identifiable, Sendable, Equatable, Codable {
+    public enum Status: String, Sendable, Codable {
         case inProgress   // tool.start seen, not yet complete
         case inReview     // blocked on an approval/clarify
         case success      // tool.complete

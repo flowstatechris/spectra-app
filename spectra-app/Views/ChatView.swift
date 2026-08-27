@@ -19,6 +19,7 @@ struct ChatView: View {
     @State private var showingStatusTransition = false
     @State private var collapsedApprovalID: String?
     @State private var showingSessions = false
+    @State private var highlightedMessageID: String?   // brief deep-link flash
 
     var body: some View {
         VStack(spacing: 0) {
@@ -143,6 +144,13 @@ struct ChatView: View {
                         MessageRow(message: message, session: session,
                                    collapsedApprovalID: $collapsedApprovalID)
                             .id(message.id)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(Theme.accent.opacity(
+                                        highlightedMessageID == message.id ? 0.14 : 0))
+                                    .padding(.horizontal, -8)
+                            )
+                            .animation(.easeInOut(duration: 0.3), value: highlightedMessageID)
                     }
                 }
                 .padding(.horizontal, 18).padding(.vertical, 20)
@@ -173,6 +181,12 @@ struct ChatView: View {
             proxy.scrollTo(target, anchor: .center)
         }
         app.clearChatScrollTarget()
+        // Brief flash so the eye lands on the deep-linked row (handoff §5).
+        highlightedMessageID = target
+        Task {
+            try? await Task.sleep(for: .seconds(1.4))
+            if highlightedMessageID == target { highlightedMessageID = nil }
+        }
     }
 
     private func approvalChip(_ approval: ApprovalRequest) -> some View {
