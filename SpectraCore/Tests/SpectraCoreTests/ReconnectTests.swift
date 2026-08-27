@@ -34,4 +34,17 @@ final class ReconnectTests: XCTestCase {
         XCTAssertNil(s.serverSessionID, "dead runtime id must be cleared")
         XCTAssertEqual(s.storedSessionID, "durable-abc123", "durable id must survive reconnect")
     }
+
+    /// A server-side reclaim (session.reclaimed) while the socket stays up must
+    /// behave like a reconnect: keep the thread + durable id so the next send
+    /// resumes, rather than stranding the user on a forgotten runtime id.
+    func testSessionReclaimedKeepsThreadAndDurableID() {
+        let msgs = [Message(role: .user, text: "hi"), Message(role: .agent, text: "yo")]
+        let s = makeSession(messages: msgs, storedSessionID: "durable-xyz")
+        s.handle(.init(type: "session.reclaimed", sessionID: "runtime-dead", payload: nil))
+        XCTAssertEqual(s.messages, msgs, "reclaim must not wipe the cached thread")
+        XCTAssertEqual(s.storedSessionID, "durable-xyz", "durable id must survive reclaim")
+        XCTAssertNil(s.serverSessionID)
+        XCTAssertEqual(s.status, .idle)
+    }
 }

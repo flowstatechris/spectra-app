@@ -380,6 +380,14 @@ public final class ProfileSession: Identifiable {
         case "turn.end":
             if streamingMessageID == nil, pendingApproval == nil { status = .idle }
 
+        case "session.reclaimed":
+            // Server reaped our runtime session (idle_timeout / lru_evict /
+            // ws_orphan_reap) while the socket stayed up. Same teardown as a
+            // reconnect — drop the dead runtime id but keep the durable id +
+            // on-screen thread, so the next send resumes the same conversation
+            // instead of failing against a forgotten id. (gateway session.reclaimed)
+            resetForReconnect()
+
         default:
             break
         }
