@@ -17,6 +17,7 @@ struct ContentView: View {
                 ProfilePickerView()
             case .ready:
                 mainTabs
+                    .task { PushManager.shared.start(app: app) }   // §11: ask + register
             }
         }
         .tint(Theme.accent)

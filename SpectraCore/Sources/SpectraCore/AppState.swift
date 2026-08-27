@@ -60,6 +60,7 @@ public final class AppState {
         guard let auth else { phase = .needsBackend; return }
         do {
             _ = try await auth.restore()
+            await postAPNsToken()           // flush any token that raced ahead of auth (§11)
             try await connectRPC()          // connects the hydrated rpc (or a fresh one)
             try await loadProfiles()        // refresh live metadata
             if sessions.isEmpty { phase = .pickingProfiles }
@@ -249,6 +250,28 @@ public final class AppState {
         } catch { return nil }
     }
 
+    /// Register this device's APNs token with Hermes (§11). Best-effort — the
+    /// token is cached so we can re-post after login or on refresh. Server keys
+    /// pushes to the authed user, so only the token + environment are needed.
+    private var apnsToken: (hex: String, environment: String)?
+    public func registerAPNsToken(hex: String, environment: String) async {
+        apnsToken = (hex, environment)
+        await postAPNsToken()
+    }
+    func postAPNsToken() async {
+        guard let (hex, env) = apnsToken, let auth, let backend else { return }
+        do {
+            let token = try await auth.validAccessToken()
+            var req = URLRequest(url: backend.baseURL.appending(path: "api/apns/register"))
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            req.httpBody = try JSONSerialization.data(
+                withJSONObject: ["device_token": hex, "environment": env])
+            _ = try await URLSession.shared.data(for: req)
+        } catch { /* best-effort; retried on next launch/foreground */ }
+    }
+
     // MARK: Refresh (spec §6: one shared refresh path)
 
     public func refreshAll() async {
@@ -257,6 +280,7 @@ public final class AppState {
             try? await rpc.connect()
         }
         try? await loadProfiles()   // additive re-sync; never removes added profiles
+        await postAPNsToken()       // re-register device token on foreground (§11)
     }
 
     // MARK: Event routing

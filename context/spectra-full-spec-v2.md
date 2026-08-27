@@ -317,10 +317,15 @@ Flat, single-level sectioned list:
 
 ## 11. Notifications
 
-- **Rich content** — iOS natively handles lock-screen content visibility per user preference; Spectra doesn't need to self-censor. Approval summaries can appear directly in the notification.
-- Fires only when the app isn't foregrounded for that profile.
-- Per-profile targeting in the notification content.
-- Interactive inline actions (Approve/Deny from the notification) are a stretch goal, not a v1 blocker.
+APNs push (token-based, ES256 `.p8`). Server half lives in Hermes; the client half is the entitlement + registration + delegate.
+
+- **Transport** — Hermes signs an ES256 provider JWT with the `.p8` and POSTs over HTTP/2 to APNs. Per-token environment: dev/sandbox builds → `api.sandbox.push.apple.com`, Release/TestFlight → `api.push.apple.com`. The client reports its env at registration; the same `.p8` serves both. Dead tokens (410 / `BadDeviceToken`) are pruned on send.
+- **Registration** — the client asks permission + `registerForRemoteNotifications` once it reaches the main app, then POSTs its device token to `POST /api/apns/register` (Bearer-auth). The token can race ahead of auth on a cached cold-launch, so it's re-flushed after `auth.restore()` and on foreground.
+- **Trigger** — fires on `approval.request` (the time-sensitive, actionable case), hooked at the gateway's approval-emit seam. Body carries the profile name + redacted command. Reply-completion pings are deferred.
+- **Foreground suppression** — the client drops the banner when the pushed profile is already on screen (`willPresent`), so it only surfaces when not foregrounded for that profile.
+- **Rich content** — iOS handles lock-screen visibility per user preference; approval summaries appear directly in the notification.
+- Interactive inline actions (Approve/Deny from the notification) remain a stretch goal, not a v1 blocker.
+- Server config lives outside the repo in `~/.hermes/apns/` (the `.p8`, `config.json` with team id + topic, `tokens.json` token store).
 
 ---
 
