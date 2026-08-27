@@ -2,14 +2,13 @@ import SwiftUI
 import SpectraCore
 import ThinkingOrbsKit
 
-/// Maps SessionStatus → ThinkingOrbsKit states (spec §7 table, adjusted to
-/// the package's real state set). Alert/attention is layered as a red badge —
-/// the orb has no danger state by design.
+/// Orb + mono status eyebrow. Maps SessionStatus → ThinkingOrbsKit states
+/// (spec §7); alert is layered as a red badge (the orb has no danger state).
 struct OrbView: View {
     let status: SessionStatus
     let connectionState: HermesRPCConnection.State
     var size: OrbSize = .px64
-    var displaySize: Double? = nil
+    var showsLabel: Bool = true
 
     private var orbState: OrbState {
         if connectionState != .connected { return .connecting }
@@ -18,24 +17,38 @@ struct OrbView: View {
         case .connecting: return .connecting
         case .thinking(let search): return search ? .searching : .working
         case .speaking: return .composing
-        case .alert: return .breathing   // badge carries the alarm, not the orb
+        case .alert: return .breathing
         }
     }
 
-    private var showsBadge: Bool {
-        if case .alert = status { return true }
-        return false
+    private var label: String {
+        if connectionState == .connecting { return "Connecting" }
+        if connectionState == .disconnected { return "Offline" }
+        switch status {
+        case .idle: return "Idle"
+        case .connecting: return "Connecting"
+        case .thinking(let search): return search ? "Searching" : "Working"
+        case .speaking: return "Composing"
+        case .alert: return "Needs you"
+        }
     }
 
+    private var isAlert: Bool { if case .alert = status { return true }; return false }
+
     var body: some View {
-        ThinkingOrb(state: orbState, size: size, displaySize: displaySize)
-            .overlay(alignment: .topTrailing) {
-                if showsBadge {
-                    Circle()
-                        .fill(.red)
-                        .frame(width: 12, height: 12)
-                        .accessibilityLabel("Needs attention")
+        VStack(spacing: 12) {
+            ThinkingOrb(state: orbState, size: size)
+                .overlay(alignment: .topTrailing) {
+                    if isAlert {
+                        Circle().fill(Theme.danger)
+                            .frame(width: 11, height: 11)
+                            .overlay(Circle().strokeBorder(Theme.paper, lineWidth: 2))
+                            .accessibilityLabel("Needs attention")
+                    }
                 }
+            if showsLabel {
+                Eyebrow(label, color: isAlert ? Theme.danger : Theme.muted)
             }
+        }
     }
 }

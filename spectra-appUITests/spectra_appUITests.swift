@@ -25,7 +25,7 @@ final class SpectraE2ETests: XCTestCase {
         app.launch()
 
         // --- Backend entry (skip if already past it from a previous run)
-        let urlField = app.textFields["http://your-hermes-host:9119"]
+        let urlField = app.textFields.firstMatch
         if urlField.waitForExistence(timeout: 5) {
             urlField.tap()
             urlField.typeText(Self.baseURL)
@@ -33,7 +33,7 @@ final class SpectraE2ETests: XCTestCase {
         }
 
         // --- Login → Safari
-        let signIn = app.buttons["Sign in"]
+        let signIn = app.buttons["Continue with browser"]
         if signIn.waitForExistence(timeout: 5) {
             XCUIApplication(bundleIdentifier: "com.apple.mobilesafari").terminate()
             signIn.tap()
@@ -72,7 +72,7 @@ final class SpectraE2ETests: XCTestCase {
         }
 
         // --- Profile picker
-        let addButton = app.buttons["Add"]
+        let addButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Add '")).firstMatch
         if addButton.waitForExistence(timeout: 15) {
             let defaultRow = app.staticTexts["default"]
             XCTAssertTrue(defaultRow.waitForExistence(timeout: 10), "profiles didn't load")

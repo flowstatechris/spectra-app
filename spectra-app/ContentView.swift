@@ -18,6 +18,7 @@ struct ContentView: View {
                 mainTabs
             }
         }
+        .tint(Theme.accent)
         .task { await app.restoreOnLaunch() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await app.refreshAll() } }
@@ -26,13 +27,9 @@ struct ContentView: View {
 
     private var mainTabs: some View {
         TabView {
-            Tab("Chat", systemImage: "bubble.left.and.text.bubble.right") {
-                ChatView()
-            }
-            Tab("Profiles", systemImage: "person.2") {
-                ProfilesView()
-            }
-            .badge(app.profilesNeedingAttention.count)
+            Tab("Chat", systemImage: "bubble.left.and.text.bubble.right") { ChatView() }
+            Tab("Profiles", systemImage: "square.stack") { ProfilesView() }
+                .badge(app.profilesNeedingAttention.count)
         }
     }
 }

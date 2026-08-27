@@ -2,117 +2,180 @@ import SwiftUI
 import AuthenticationServices
 import SpectraCore
 
-/// Step 1 (spec §5): backend base-URL entry.
+/// Step 1 (spec §5): backend base-URL entry — editorial cover.
 struct BackendConfigView: View {
     @Environment(AppState.self) private var app
     @State private var urlText = ""
     @FocusState private var focused: Bool
 
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 0) {
             Spacer()
             Image("LogoMark")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 72, height: 72)
+                .resizable().scaledToFit()
+                .frame(width: 64, height: 64)
+                .foregroundStyle(Theme.ink)
             Text("Spectra")
-                .font(.largeTitle.bold())
+                .font(Theme.serif(52))
+                .foregroundStyle(Theme.ink)
+                .padding(.top, 18)
             Text("Any Hermes instance. Your phone. One app.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            TextField("http://your-hermes-host:9119", text: $urlText)
-                .textFieldStyle(.roundedBorder)
-                .keyboardType(.URL)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .focused($focused)
-                .padding(.horizontal, 32)
+                .font(Theme.mono(12))
+                .tracking(0.4)
+                .foregroundStyle(Theme.muted)
+                .padding(.top, 6)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Eyebrow("Backend")
+                TextField("", text: $urlText, prompt:
+                    Text("http://10.0.0.182:9119").foregroundStyle(Theme.muted.opacity(0.6)))
+                    .font(Theme.mono(15))
+                    .foregroundStyle(Theme.ink)
+                    .keyboardType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .focused($focused)
+                    .padding(.vertical, 14).padding(.horizontal, 16)
+                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(focused ? Theme.accent : Theme.hairline, lineWidth: 1))
+            }
+            .padding(.top, 56)
+            .padding(.horizontal, 28)
+
             Button("Connect") {
                 guard var comps = URLComponents(string: urlText.trimmingCharacters(in: .whitespaces)) else { return }
                 if comps.scheme == nil { comps.scheme = "http" }
                 if let url = comps.url { app.setBackend(url) }
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(PrimaryButton())
             .disabled(urlText.trimmingCharacters(in: .whitespaces).isEmpty)
-            Spacer()
-            Spacer()
+            .opacity(urlText.trimmingCharacters(in: .whitespaces).isEmpty ? 0.4 : 1)
+            .padding(.horizontal, 28)
+            .padding(.top, 20)
+
+            Spacer(); Spacer()
         }
+        .paper()
         .onAppear { focused = true }
     }
 }
 
-/// Step 2 (spec §5): system-browser login with orb spinner while brokering.
+/// Step 2 (spec §5): system-browser login, orb while brokering.
 struct LoginView: View {
     @Environment(AppState.self) private var app
-    @Environment(\.webAuthenticationSession) private var webAuth
 
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 0) {
             Spacer()
             OrbView(status: .connecting, connectionState: .connecting)
-            if case .loggingIn = app.phase {
-                Text("Setting up your workspace")
-                    .font(.headline)
-            } else {
-                Text(app.backend?.displayName ?? "")
-                    .font(.headline)
-                Button("Sign in") { Task { await signIn() } }
-                    .buttonStyle(.borderedProminent)
-            }
-            if case .error(let message) = app.phase {
-                VStack(spacing: 12) {
-                    Text(message)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                    Button("Try again") { Task { await signIn() } }
+            Group {
+                if case .loggingIn = app.phase {
+                    Eyebrow("Setting up your workspace", color: Theme.accent)
+                        .padding(.top, 28)
+                } else {
+                    VStack(spacing: 14) {
+                        Eyebrow("Sign in")
+                        Text(app.backend?.displayName ?? "")
+                            .font(Theme.serif(28))
+                            .foregroundStyle(Theme.ink)
+                        Button("Continue with browser") { Task { await signIn() } }
+                            .buttonStyle(PrimaryButton())
+                            .padding(.horizontal, 40)
+                            .padding(.top, 4)
+                    }
+                    .padding(.top, 28)
                 }
             }
-            Spacer()
-            Spacer()
+            if case .error(let message) = app.phase {
+                VStack(spacing: 14) {
+                    Text(message)
+                        .font(Theme.mono(12))
+                        .foregroundStyle(Theme.danger)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 40)
+                    Button("Try again") { Task { await signIn() } }
+                        .buttonStyle(OutlineButton())
+                }
+                .padding(.top, 24)
+            }
+            Spacer(); Spacer()
         }
+        .paper()
     }
 
     private func signIn() async {
-        await app.login { url in
-            // RFC 8252: real system-browser context. ASWebAuthenticationSession
-            // with an http callback isn't usable; the loopback listener catches
-            // the redirect, so plain open is correct here.
-            UIApplication.shared.open(url)
-        }
+        await app.login { url in UIApplication.shared.open(url) }
     }
 }
 
-/// Step 3 (spec §5): checklist of discovered profiles, select-all, explicit add.
+/// Step 3 (spec §5): profile checklist, select-all, explicit add.
 struct ProfilePickerView: View {
     @Environment(AppState.self) private var app
     @State private var selected: Set<String> = []
 
     var body: some View {
-        NavigationStack {
-            List(app.availableProfiles, selection: $selected) { profile in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(profile.name).font(.body)
-                    if !profile.model.isEmpty {
-                        Text(profile.model)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 6) {
+                    Eyebrow("Discovered")
+                    Text("Add profiles")
+                        .font(Theme.serif(34))
+                        .foregroundStyle(Theme.ink)
+                }
+                Spacer()
+                Button(selected.count == app.availableProfiles.count ? "None" : "All") {
+                    selected = selected.count == app.availableProfiles.count
+                        ? [] : Set(app.availableProfiles.map(\.name))
+                }
+                .buttonStyle(OutlineButton())
+            }
+            .padding(.horizontal, 24).padding(.top, 12).padding(.bottom, 20)
+
+            ScrollView {
+                VStack(spacing: 10) {
+                    ForEach(app.availableProfiles) { profile in
+                        profileRow(profile)
                     }
                 }
-                .tag(profile.name)
+                .padding(.horizontal, 24)
             }
-            .environment(\.editMode, .constant(.active))
-            .navigationTitle("Add profiles")
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Select all") { selected = Set(app.availableProfiles.map(\.name)) }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Add") { app.addProfiles(Array(selected).sorted()) }
-                        .disabled(selected.isEmpty)
-                }
+
+            Button("Add \(selected.count) profile\(selected.count == 1 ? "" : "s")") {
+                app.addProfiles(Array(selected).sorted())
             }
+            .buttonStyle(PrimaryButton())
+            .disabled(selected.isEmpty)
+            .opacity(selected.isEmpty ? 0.4 : 1)
+            .padding(.horizontal, 24).padding(.vertical, 16)
         }
+        .paper()
+    }
+
+    private func profileRow(_ profile: ProfileInfo) -> some View {
+        let isOn = selected.contains(profile.name)
+        return Button {
+            if isOn { selected.remove(profile.name) } else { selected.insert(profile.name) }
+        } label: {
+            HStack(spacing: 14) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(profile.name)
+                        .font(Theme.serif(20))
+                        .foregroundStyle(Theme.ink)
+                    if !profile.model.isEmpty {
+                        Text(profile.model)
+                            .font(Theme.mono(11))
+                            .foregroundStyle(Theme.muted)
+                    }
+                }
+                Spacer()
+                Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(isOn ? Theme.accent : Theme.hairline)
+            }
+            .padding(16)
+            .card(border: isOn ? Theme.accent.opacity(0.5) : Theme.hairline)
+        }
+        .buttonStyle(.plain)
     }
 }
