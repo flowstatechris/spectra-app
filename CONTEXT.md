@@ -13,20 +13,16 @@ A named agent configuration that lives on a Backend (e.g. `trading`, `odrop`). T
 _Avoid_: Agent, bot
 
 **ProfileSession**:
-The client-side object holding one Profile's live connection state: its message history, status, pending Approval/Clarify, and its three independent sockets (PTY, Events, RPC — see below). One per added Profile.
-_Avoid_: Connection, session (bare) — always qualify: "the PTY connection," "the events connection," not "the socket"
-
-**PTY connection**:
-The raw terminal-byte-stream socket (`/api/pty`) carrying chat text in and rendered output back. `/image` and other slash commands are sent here as plain text, not JSON. Supports `attach=<channelID>` resume: detaching buffers into a 30-minute ring buffer rather than killing the session.
-_Avoid_: Chat socket, terminal socket
-
-**Events connection**:
-The structured JSON status stream (`/api/events`). Passive — only emits while a PTY session on the same channel is live and running. Drives the Orb; carries no approval/clarify data.
-_Avoid_: Status socket
+The client-side object holding one Profile's live chat state: its message history, status, pending Approval/Clarify, and its server Session id. One per added Profile. All wire traffic flows through the Backend's shared RPC connection (see ADR-0002).
+_Avoid_: Connection, socket (a ProfileSession doesn't own a socket — the Backend's RPC connection is shared)
 
 **RPC connection**:
-The JSON-RPC socket (`/api/ws`) carrying Approval and Clarify requests/responses. Distinct from both PTY and Events — a third, separate connection per ProfileSession.
-_Avoid_: WS, the websocket (there are three; always name which)
+The single JSON-RPC WebSocket (`/api/ws`) per Backend carrying everything: chat (`session.create`/`prompt.submit`), streaming events (`message.delta`, `status.update`, `tool.start`/`tool.complete`), Approval and Clarify requests/responses, and rich profile metadata (`profiles.list`). Line-delimited JSON-RPC 2.0; events are `method: "event"` notifications with `params.type`/`params.session_id`/`params.payload`.
+_Avoid_: WS (bare), gateway socket
+
+**Session** *(server-side)*:
+One conversation thread the Backend owns, created via `session.create` (scoped to a Profile), addressed by `session_id`, with durable history readable via `session.history`. Outlives any socket.
+_Avoid_: Chat, thread (in code — UI copy may say "chat")
 
 **Approval**:
 A hard block on sending: the server requires the user pick one of 2-4 dynamic choices (`once`/`session`/`always`/`deny`) before the ProfileSession will accept new input. Delivered and resolved over the RPC connection. Once resolved, becomes a permanent green receipt in the message history.
