@@ -242,10 +242,17 @@ struct MessageRow: View {
                 // Agent: plain mono (spec §9), thin accent rule for identity.
                 HStack(alignment: .top, spacing: 12) {
                     Rectangle().fill(Theme.accent.opacity(0.5)).frame(width: 2)
-                    Text(message.text)
-                        .font(Theme.mono(14))
-                        .foregroundStyle(Theme.ink)
-                        .textSelection(.enabled)
+                    VStack(alignment: .leading, spacing: 10) {
+                        if !message.text.isEmpty {
+                            Text(message.text)
+                                .font(Theme.mono(14))
+                                .foregroundStyle(Theme.ink)
+                                .textSelection(.enabled)
+                        }
+                        ForEach(message.media) { m in     // §9 receive-side
+                            AgentMediaView(media: m)
+                        }
+                    }
                     Spacer(minLength: 24)
                 }
             }
@@ -361,6 +368,104 @@ private struct ImageViewer: View {
         }
     }
 }
+
+/// One piece of agent-sent media (§9 receive-side): images render inline
+/// (tap → full screen), non-image files as a share card. Bytes are fetched
+/// lazily via AppState (cached) — see MediaFetch for the endpoints.
+private struct AgentMediaView: View {
+    let media: SpectraCore.Message.ReceivedMedia
+    @Environment(AppState.self) private var app
+    @State private var data: Data?
+    @State private var failed = false
+    @State private var showFull = false
+    @State private var shareURL: URL?
+
+    var body: some View {
+        if media.isImage {
+            imageBody
+                .task(id: media.id) {
+                    data = await app.fetchAgentMedia(media)
+                    failed = data == nil
+                }
+        } else {
+            fileCard
+        }
+    }
+
+    @ViewBuilder private var imageBody: some View {
+        if let data, let img = UIImage(data: data) {
+            VStack(alignment: .leading, spacing: 4) {
+                Image(uiImage: img).resizable().scaledToFit()
+                    .frame(maxWidth: 260, maxHeight: 260)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .onTapGesture { showFull = true }
+                    .accessibilityLabel("Image \(media.name). Tap to view full screen.")
+                    .fullScreenCover(isPresented: $showFull) { ImageViewer(data: data) }
+                if let cap = media.caption {
+                    Text(cap).font(Theme.mono(11)).foregroundStyle(Theme.muted)
+                }
+            }
+        } else if failed {
+            placeholder(icon: "photo", text: media.name)
+        } else {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Theme.hairline.opacity(0.4))
+                .frame(width: 160, height: 120)
+                .overlay(ProgressView())
+                .accessibilityLabel("Loading image \(media.name)")
+        }
+    }
+
+    private var fileCard: some View {
+        Button {
+            Task {
+                if data == nil { data = await app.fetchAgentMedia(media) }
+                guard let data else { failed = true; return }
+                let url = FileManager.default.temporaryDirectory.appendingPathComponent(media.name)
+                try? data.write(to: url)
+                shareURL = url
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "doc.fill").foregroundStyle(Theme.accent)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(media.name).font(Theme.mono(13)).foregroundStyle(Theme.ink).lineLimit(1)
+                    if let cap = media.caption {
+                        Text(cap).font(Theme.mono(11)).foregroundStyle(Theme.muted).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "square.and.arrow.up").foregroundStyle(Theme.muted)
+            }
+            .padding(12)
+            .background(Theme.hairline.opacity(0.25), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("File \(media.name). Tap to open or share.")
+        .sheet(item: $shareURL) { url in ShareSheet(url: url) }
+    }
+
+    private func placeholder(icon: String, text: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon).foregroundStyle(Theme.muted)
+            Text(text).font(Theme.mono(11)).foregroundStyle(Theme.muted)
+        }
+        .padding(10)
+        .background(Theme.hairline.opacity(0.25), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+}
+
+/// Minimal UIKit share sheet bridge for file media (§9). ponytail: SwiftUI has
+/// no native activity-sheet, so one small representable.
+private struct ShareSheet: UIViewControllerRepresentable {
+    let url: URL
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [url], applicationActivities: nil)
+    }
+    func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
+}
+
+extension URL: @retroactive Identifiable { public var id: String { absoluteString } }
 
 private extension UIImage {
     /// Downscale so the longest side ≤ maxDim, then JPEG-encode. Keeps uploads

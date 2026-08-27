@@ -232,6 +232,21 @@ public final class AppState {
         }
     }
 
+    /// Fetch agent-sent media bytes (§9 receive-side), cached so scrolling
+    /// doesn't refetch. Returns nil if not logged in / fetch fails — the view
+    /// falls back to a placeholder card.
+    private var mediaCache: [String: Data] = [:]
+    public func fetchAgentMedia(_ media: Message.ReceivedMedia) async -> Data? {
+        if let hit = mediaCache[media.id] { return hit }
+        guard let auth, let backend else { return nil }
+        do {
+            let token = try await auth.validAccessToken()
+            let data = try await MediaFetch.data(for: media, baseURL: backend.baseURL, token: token)
+            mediaCache[media.id] = data
+            return data
+        } catch { return nil }
+    }
+
     // MARK: Refresh (spec §6: one shared refresh path)
 
     public func refreshAll() async {

@@ -140,10 +140,15 @@ public final class ProfileSession: Identifiable {
         case "message.complete":
             let finalText = event.payload?["text"] as? String
             if let id = streamingMessageID, let idx = messages.firstIndex(where: { $0.id == id }) {
-                if let finalText { messages[idx].text = finalText }
-                if messages[idx].text.isEmpty { messages.remove(at: idx) }
+                let (clean, media) = AgentMedia.parse(finalText ?? messages[idx].text)
+                messages[idx].text = clean
+                messages[idx].media = media
+                if clean.isEmpty && media.isEmpty { messages.remove(at: idx) }
             } else if let finalText, !finalText.isEmpty {
-                messages.append(Message(role: .agent, text: finalText))
+                let (clean, media) = AgentMedia.parse(finalText)
+                if !clean.isEmpty || !media.isEmpty {
+                    messages.append(Message(role: .agent, text: clean, media: media))
+                }
             }
             streamingMessageID = nil
             if pendingApproval == nil { status = .idle }

@@ -62,19 +62,54 @@ public struct Message: Identifiable, Sendable, Equatable, Codable {
         }
     }
 
+    /// Media the agent sent back inline (§9 receive-side). Parsed out of the
+    /// agent's message text at `message.complete` (see `AgentMedia`), so `text`
+    /// holds the clean prose and these render as inline images / file cards.
+    public struct ReceivedMedia: Sendable, Equatable, Codable, Identifiable {
+        public enum Slot: Sendable, Equatable, Codable {
+            case remoteURL(URL)        // markdown ![](http…) — fetch directly
+            case serverImage(String)   // MEDIA:<img path> — GET /api/media?path=
+            case serverFile(String)    // MEDIA:<other path> — GET /api/files/download?path=
+        }
+        public let id: String
+        public let slot: Slot
+        public let name: String        // basename, or markdown alt text
+        public let caption: String?
+        public var isImage: Bool { if case .serverFile = slot { return false }; return true }
+        public init(id: String = UUID().uuidString, slot: Slot, name: String, caption: String? = nil) {
+            self.id = id; self.slot = slot; self.name = name; self.caption = caption
+        }
+    }
+
     public let id: String
     public let role: Role
     public var text: String
     public var kind: Kind
     public var attachment: Attachment?
+    public var media: [ReceivedMedia]
 
     public init(id: String = UUID().uuidString, role: Role, text: String,
-                kind: Kind = .plain, attachment: Attachment? = nil) {
+                kind: Kind = .plain, attachment: Attachment? = nil,
+                media: [ReceivedMedia] = []) {
         self.id = id
         self.role = role
         self.text = text
         self.kind = kind
         self.attachment = attachment
+        self.media = media
+    }
+
+    // Hand-rolled Codable so a cached thread written before `media` existed
+    // still decodes (keeps §10 instant cold-launch across app upgrades).
+    enum CodingKeys: String, CodingKey { case id, role, text, kind, attachment, media }
+    public init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        role = try c.decode(Role.self, forKey: .role)
+        text = try c.decode(String.self, forKey: .text)
+        kind = try c.decode(Kind.self, forKey: .kind)
+        attachment = try c.decodeIfPresent(Attachment.self, forKey: .attachment)
+        media = try c.decodeIfPresent([ReceivedMedia].self, forKey: .media) ?? []
     }
 }
 
