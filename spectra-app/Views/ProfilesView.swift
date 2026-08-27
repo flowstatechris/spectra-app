@@ -39,7 +39,7 @@ struct ProfilesView: View {
     }
 
     private func row(_ session: ProfileSession) -> some View {
-        let attention = session.pendingApproval != nil || session.pendingClarify != nil
+        let attention = session.attention
         return HStack(spacing: 14) {
             Circle()
                 .fill(app.connectionState == .connected ? Theme.ok : Theme.muted)
@@ -55,16 +55,18 @@ struct ProfilesView: View {
                 }
             }
             Spacer()
-            if attention {
-                Circle().fill(Theme.danger).frame(width: 8, height: 8)
-            }
-            if app.activeProfileName == session.profile.name {
+            if let attention {
+                HStack(spacing: 5) {
+                    Circle().fill(Theme.danger).frame(width: 8, height: 8)
+                    Eyebrow(attention.label, color: Theme.danger)
+                }
+            } else if app.activeProfileName == session.profile.name {
                 Eyebrow("Active", color: Theme.accent)
             }
             Image(systemName: "chevron.right").font(.caption).foregroundStyle(Theme.muted).accessibilityHidden(true)
         }
         .padding(16)
-        .card(border: attention ? Theme.danger.opacity(0.4) : Theme.hairline)
+        .card(border: attention != nil ? Theme.danger.opacity(0.4) : Theme.hairline)
         .contentShape(Rectangle())
         .simultaneousGesture(TapGesture().onEnded {
             app.activeProfileName = session.profile.name

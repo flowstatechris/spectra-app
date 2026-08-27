@@ -179,6 +179,30 @@ public final class ProfileSession: Identifiable {
         }
     }
 
+    // MARK: Attention (handoff §6)
+
+    /// Whether this profile needs the user to act — the one attention signal the
+    /// profile row, tab badge, and notification routing all read. Routine work
+    /// (a running tool) is deliberately NOT attention.
+    public enum Attention: Sendable, Equatable {
+        case approval   // Hermes is blocked on permission
+        case clarify    // Hermes asked a question
+
+        public var label: String {
+            switch self {
+            case .approval: "Needs permission"
+            case .clarify:  "Needs answer"
+            }
+        }
+    }
+
+    /// Approval outranks clarify — it hard-blocks sending, a clarify doesn't.
+    public var attention: Attention? {
+        if pendingApproval != nil { return .approval }
+        if pendingClarify != nil { return .clarify }
+        return nil
+    }
+
     // MARK: Sending
 
     public var canSend: Bool { pendingApproval == nil }

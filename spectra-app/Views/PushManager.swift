@@ -46,6 +46,14 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
         if let profile, profile == app?.activeProfileName { return [] }
         return [.banner, .sound, .list]
     }
+
+    // Tap: route to the pushed profile's Chat so the approval/clarify that
+    // raised the notification is right there (§6 attention routing).
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse) async {
+        let profile = response.notification.request.content.userInfo["profile"] as? String
+        app?.routeToChat(profile: profile)
+    }
 }
 
 /// UIKit AppDelegate shim — the SwiftUI App lifecycle has no remote-token hook.

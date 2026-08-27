@@ -40,13 +40,20 @@ public final class AppState {
     }
 
     public var profilesNeedingAttention: Set<String> {
-        Set(sessions.values.filter { $0.pendingApproval != nil || $0.pendingClarify != nil }
-            .map(\.profile.name))
+        Set(sessions.values.filter { $0.attention != nil }.map(\.profile.name))
     }
 
     public func openActivity(_ item: ActivityItem) {
         activeProfileName = item.profileName
         chatScrollTargetID = item.targetMessageID
+    }
+
+    /// A tapped notification (or any request to jump to a profile's chat) bumps
+    /// this token; ContentView observes it to switch to the Chat tab. (§6/§11)
+    public private(set) var chatRouteToken = 0
+    public func routeToChat(profile: String?) {
+        if let profile, sessions[profile] != nil { activeProfileName = profile }
+        chatRouteToken &+= 1
     }
 
     public func clearChatScrollTarget() { chatScrollTargetID = nil }

@@ -33,6 +33,7 @@ struct ContentView: View {
             @unknown default: break
             }
         }
+        .onChange(of: app.chatRouteToken) { selectedTab = .chat }  // tapped push → Chat (§6/§11)
     }
 
     private var mainTabs: some View {
