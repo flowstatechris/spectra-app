@@ -107,14 +107,19 @@ struct ChatView: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("\(app.activeProfileName ?? "Profile"), \(statusLabel)")
             } else {
-                VStack(spacing: 10) {
-                    if let name = app.activeProfileName {
-                        Eyebrow(name)
-                    }
+                VStack(spacing: 6) {
+                    // Half-size orb: px64 is the only calibrated preset besides
+                    // px20, so scale it 0.5 and collapse the reserved box to 32.
                     OrbView(status: app.activeSession?.status ?? .idle,
-                            connectionState: app.connectionState, size: .px64)
+                            connectionState: app.connectionState,
+                            size: .px64, showsLabel: false)
+                        .scaleEffect(0.5)
+                        .frame(width: 32, height: 32)
+                    Text("\(app.activeProfileName ?? "") · \(statusLabel)")
+                        .font(Theme.mono(12, .medium))
+                        .foregroundStyle(Theme.muted)
                 }
-                .padding(.vertical, 16)
+                .padding(.vertical, 10)
             }
         }
         .frame(maxWidth: .infinity)
