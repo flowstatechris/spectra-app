@@ -16,9 +16,10 @@ struct TasksView: View {
                     }
                     .padding(.horizontal, 24)
                 }
-                .padding(.bottom, 20)
-            }
-            .paper()
+                .frame(maxWidth: .infinity, alignment: .leading)  // fill width so
+                .padding(.bottom, 20)                              // .paper() covers the
+            }                                                      // whole screen, not just
+            .paper()                                               // the narrow empty-feed column
             .navigationTitle("Tasks")
             .navigationBarTitleDisplayMode(.inline)
             .overlay {

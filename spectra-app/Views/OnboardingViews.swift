@@ -46,9 +46,15 @@ struct BackendConfigView: View {
             .padding(.horizontal, 28)
 
             Button("Connect") {
-                guard var comps = URLComponents(string: urlText.trimmingCharacters(in: .whitespaces)) else { return }
-                if comps.scheme == nil { comps.scheme = "http" }
-                if let url = comps.url { app.setBackend(url) }
+                // Force a scheme BEFORE parsing: URLComponents reads a bare
+                // "10.0.0.182:9119" with the host as the scheme, so a
+                // scheme==nil check never fires and the URL comes out malformed.
+                var s = urlText.trimmingCharacters(in: .whitespaces)
+                if !s.lowercased().hasPrefix("http://") && !s.lowercased().hasPrefix("https://") {
+                    s = "http://" + s
+                }
+                guard let url = URLComponents(string: s)?.url, url.host != nil else { return }
+                app.setBackend(url)
             }
             .buttonStyle(PrimaryButton())
             .disabled(urlText.trimmingCharacters(in: .whitespaces).isEmpty)
