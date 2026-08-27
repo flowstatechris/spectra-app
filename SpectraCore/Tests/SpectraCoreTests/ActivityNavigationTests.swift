@@ -29,7 +29,7 @@ final class ActivityNavigationTests: XCTestCase {
     /// feed row (Waiting), deep-linked to the approval card.
     func testApprovalWithoutToolInsertsStandaloneRow() {
         let app = AppState()
-        app.recordActivity(profileName: "default", event: .init(
+        app.recordActivityForTest(profileName: "default", event: .init(
             type: "approval.request", sessionID: "s1",
             payload: ["request_id": "req-9", "command": "rm -rf build"]))
         XCTAssertEqual(app.activityFeed.count, 1)
@@ -42,7 +42,7 @@ final class ActivityNavigationTests: XCTestCase {
     /// handoff §5: an interruption with no running tool still gets a row.
     func testInterruptedTurnWithoutToolInsertsStandaloneRow() {
         let app = AppState()
-        app.recordActivity(profileName: "default", event: .init(
+        app.recordActivityForTest(profileName: "default", event: .init(
             type: "turn.end", sessionID: "s1", payload: ["interrupted": true]))
         XCTAssertEqual(app.activityFeed.count, 1)
         XCTAssertEqual(app.activityFeed[0].status, .interrupted)

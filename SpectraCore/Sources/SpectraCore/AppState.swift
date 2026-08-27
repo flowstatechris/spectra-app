@@ -381,7 +381,7 @@ public final class AppState {
     /// Fold tool/turn events into the cross-profile feed. Linear scan on
     /// completion (feed is capped at 200 — swap for a tool_id index only if
     /// that ever shows up in a profile). ponytail: O(n) flip, n<=200.
-    func recordActivity(profileName: String, event: HermesRPCConnection.Event) {  // internal: exercised by tests
+    private func recordActivity(profileName: String, event: HermesRPCConnection.Event) {
         switch event.type {
         case "tool.start":
             guard let toolID = event.payload?["tool_id"] as? String else { return }
@@ -451,6 +451,13 @@ public final class AppState {
             break
         }
     }
+
+    #if DEBUG
+    /// Test-only entry point; recordActivity itself stays private.
+    func recordActivityForTest(profileName: String, event: HermesRPCConnection.Event) {
+        recordActivity(profileName: profileName, event: event)
+    }
+    #endif
 
     private func insertActivity(_ item: ActivityItem) {
         activityFeed.insert(item, at: 0)
