@@ -244,10 +244,7 @@ struct MessageRow: View {
                     Rectangle().fill(Theme.accent.opacity(0.5)).frame(width: 2)
                     VStack(alignment: .leading, spacing: 10) {
                         if !message.text.isEmpty {
-                            Text(message.text)
-                                .font(Theme.mono(14))
-                                .foregroundStyle(Theme.ink)
-                                .textSelection(.enabled)
+                            MarkdownText(text: message.text)   // §9: rendered markdown
                         }
                         ForEach(message.media) { m in     // §9 receive-side
                             AgentMediaView(media: m)
