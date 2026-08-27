@@ -18,10 +18,15 @@ struct ChatView: View {
     @State private var showingInitialHeader = true
     @State private var showingStatusTransition = false
     @State private var collapsedApprovalID: String?
+    @State private var showingSessions = false
 
     var body: some View {
         VStack(spacing: 0) {
             header
+                .contentShape(Rectangle())
+                .onTapGesture { if app.activeSession != nil { showingSessions = true } }
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint("Switch or start a chat")
             Hairline()
             if let error = app.connectionError {
                 offlineBanner(error)
@@ -38,6 +43,11 @@ struct ChatView: View {
             }
         }
         .paper()
+        .sheet(isPresented: $showingSessions) {
+            if let session = app.activeSession {
+                SessionSwitcherView(session: session)
+            }
+        }
         .animation(.snappy, value: compactHeader)
         .animation(.snappy, value: app.activeSession?.pendingApproval)
         .animation(.snappy, value: app.activeSession?.pendingClarify)
@@ -87,6 +97,9 @@ struct ChatView: View {
                             size: .px20, showsLabel: false)
                     Text("\(app.activeProfileName ?? "") · \(statusLabel)")
                         .font(Theme.mono(12, .medium))
+                        .foregroundStyle(Theme.muted)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(Theme.muted)
                     Spacer()
                 }

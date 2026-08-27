@@ -86,6 +86,99 @@ public final class ProfileSession: Identifiable {
         status = .idle
     }
 
+    // MARK: Session switching (handoff §2b)
+
+    /// One row in the recent-sessions picker.
+    public struct SessionSummary: Identifiable, Sendable, Equatable {
+        public let id: String        // durable stored id — pass to switchTo()
+        public let title: String
+        public let preview: String
+        public let startedAt: Double
+        public let messageCount: Int
+        public var isCurrent: Bool
+    }
+
+    /// Switching adopts a new runtime session; block it mid-turn / mid-approval
+    /// so we never abandon a supervised runtime (handoff §2b).
+    public var canSwitchSessions: Bool { !isRunning && pendingApproval == nil }
+
+    /// Recent sessions for this profile, newest first (`session.list`).
+    public func listSessions() async throws -> [SessionSummary] {
+        let r = try await rpc.call("session.list", params: ["profile": profile.name])
+        let rows = r["sessions"] as? [[String: Any]] ?? []
+        return rows.compactMap { row in
+            guard let id = row["id"] as? String else { return nil }
+            return SessionSummary(
+                id: id,
+                title: (row["title"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Untitled",
+                preview: row["preview"] as? String ?? "",
+                startedAt: Self.double(row["started_at"]) ?? 0,
+                messageCount: (row["message_count"] as? NSNumber)?.intValue ?? 0,
+                isCurrent: id == storedSessionID)
+        }
+    }
+
+    /// Start a fresh server conversation, clearing the visible timeline.
+    public func newSession() async {
+        guard canSwitchSessions else { return }
+        do {
+            let r = try await rpc.call("session.create",
+                                       params: ["profile": profile.name,
+                                                "title": "Spectra — \(profile.name)"])
+            adopt(runtimeID: r["session_id"] as? String,
+                  storedID: r["stored_session_id"] as? String,
+                  messages: [])
+        } catch { recordError("Couldn't start a new chat.") }
+    }
+
+    /// Open an existing durable session: adopt its new runtime id and replace
+    /// the visible timeline with Hermes history. Unlike a reconnect-resume this
+    /// pulls messages, because the user is deliberately changing conversations.
+    public func switchTo(_ storedID: String) async {
+        guard canSwitchSessions, storedID != storedSessionID else { return }
+        status = .connecting
+        do {
+            let r = try await rpc.call("session.resume",
+                                       params: ["session_id": storedID,
+                                                "profile": profile.name])
+            adopt(runtimeID: r["session_id"] as? String,
+                  storedID: (r["stored_session_id"] as? String) ?? storedID,
+                  messages: Self.mapHistory(r["messages"]))
+        } catch {
+            status = .idle
+            recordError("Couldn't open that chat.")
+        }
+    }
+
+    private func adopt(runtimeID: String?, storedID: String?, messages: [Message]) {
+        serverSessionID = runtimeID
+        storedSessionID = storedID
+        self.messages = messages
+        pendingClarify = nil
+        streamingMessageID = nil
+        lastError = nil
+        status = .idle
+    }
+
+    /// Hermes history → Spectra timeline. v1 keeps only user/assistant text
+    /// rows; tool/system rows are skipped rather than reconstructed into
+    /// ToolActivity/Approval objects (handoff: don't reproduce the whole
+    /// surface — reconcile richer local state in a later slice).
+    nonisolated static func mapHistory(_ raw: Any?) -> [Message] {
+        guard let rows = raw as? [[String: Any]] else { return [] }
+        return rows.compactMap { row in
+            guard let role = row["role"] as? String,
+                  let text = row["text"] as? String,
+                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return nil }
+            switch role {
+            case "user": return Message(role: .user, text: text)
+            case "assistant": return Message(role: .agent, text: text)
+            default: return nil
+            }
+        }
+    }
+
     // MARK: Sending
 
     public var canSend: Bool { pendingApproval == nil }
