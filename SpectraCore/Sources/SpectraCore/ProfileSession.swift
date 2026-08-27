@@ -15,6 +15,11 @@ public final class ProfileSession: Identifiable {
     public private(set) var pendingApproval: ApprovalRequest?   // hard block on send()
     public private(set) var pendingClarify: ClarifyRequest?     // soft — thread stays live
     public private(set) var serverSessionID: String?
+    /// Durable Hermes session key (`stored_session_id`). Unlike the runtime
+    /// `serverSessionID` (reaped on ws disconnect), this survives reconnects and
+    /// relaunches, so ensureSession() resumes it instead of forking a new server
+    /// conversation. See handoff §2.
+    public private(set) var storedSessionID: String?
     public private(set) var lastError: String?
     /// Image staged on the server (via image.attach) waiting to ride the next
     /// send() as an inline thumbnail on the user's message (§9).
@@ -24,30 +29,52 @@ public final class ProfileSession: Identifiable {
     private var streamingMessageID: String?
 
     public init(profile: ProfileInfo, rpc: HermesRPCConnection,
-                restoring messages: [Message] = []) {
+                restoring messages: [Message] = [],
+                storedSessionID: String? = nil) {
         self.profile = profile
         self.rpc = rpc
         self.messages = messages
-        // serverSessionID stays nil on restore: the cached thread is display-
-        // only; first send() opens a fresh server session. (see Persistence.swift)
+        self.storedSessionID = storedSessionID
+        // serverSessionID stays nil on restore: the runtime session is gone.
+        // But a restored storedSessionID lets the first send() resume the same
+        // durable Hermes conversation instead of forking. (see Persistence.swift)
     }
 
     // MARK: Session lifecycle
 
-    /// Create (or reuse) this profile's server session.
+    /// Bind a live runtime session for this profile. Resumes the durable
+    /// conversation when we have one (reconnect / relaunch continuity), else
+    /// creates a fresh one. Any resume failure — reaped, too large, db error —
+    /// falls back to create so a send is never stranded.
     public func ensureSession() async throws {
         guard serverSessionID == nil else { return }
         status = .connecting
+        defer { status = .idle }
+        if let stored = storedSessionID {
+            // omit_messages: Spectra keeps its own richer local timeline (folded
+            // ToolActivity/Approval/Clarify rows Hermes history doesn't carry);
+            // we only need a runtime id rebound to the same server conversation.
+            if let r = try? await rpc.call("session.resume",
+                                           params: ["session_id": stored,
+                                                    "profile": profile.name,
+                                                    "omit_messages": true]),
+               let sid = r["session_id"] as? String {
+                serverSessionID = sid
+                storedSessionID = (r["stored_session_id"] as? String) ?? stored
+                return
+            }
+        }
         let result = try await rpc.call("session.create",
                                         params: ["profile": profile.name,
                                                  "title": "Spectra — \(profile.name)"])
         serverSessionID = result["session_id"] as? String
-        status = .idle
+        storedSessionID = result["stored_session_id"] as? String
     }
 
-    /// After a socket drop + reconnect: the server reaped this session, so drop
-    /// the dead id and any in-flight prompts. Cached messages stay on screen;
-    /// the next send() opens a fresh server session.
+    /// After a socket drop + reconnect: the server reaped the *runtime* session,
+    /// so drop the dead runtime id and any in-flight prompts. Cached messages
+    /// stay on screen. storedSessionID is deliberately kept so the next send()
+    /// resumes the same durable conversation rather than forking a new one.
     public func resetForReconnect() {
         if let id = pendingApproval?.id { updateApproval(id: id, state: .expired) }
         if let id = pendingClarify?.id { updateClarification(id: id, state: .expired) }

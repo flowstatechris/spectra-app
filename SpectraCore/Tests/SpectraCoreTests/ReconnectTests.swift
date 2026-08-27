@@ -3,11 +3,12 @@ import XCTest
 
 @MainActor
 final class ReconnectTests: XCTestCase {
-    private func makeSession(messages: [Message]) -> ProfileSession {
+    private func makeSession(messages: [Message], storedSessionID: String? = nil) -> ProfileSession {
         let cfg = BackendConfig(baseURL: URL(string: "http://10.0.0.182:9119")!)
         let rpc = HermesRPCConnection(auth: HermesAuthClient(backend: cfg))  // never connected
         let profile = ProfileInfo(dict: ["name": "trading"])!
-        return ProfileSession(profile: profile, rpc: rpc, restoring: messages)
+        return ProfileSession(profile: profile, rpc: rpc, restoring: messages,
+                              storedSessionID: storedSessionID)
     }
 
     /// The core §12 invariant: a reconnect drops the dead server session but the
@@ -21,5 +22,16 @@ final class ReconnectTests: XCTestCase {
         XCTAssertNil(s.pendingApproval)
         XCTAssertNil(s.pendingClarify)
         XCTAssertEqual(s.status, .idle)
+    }
+
+    /// Continuity backbone (handoff §2): a reconnect drops the dead *runtime*
+    /// id but must keep the durable `storedSessionID`, so the next ensureSession
+    /// resumes the same server conversation instead of forking a fresh one.
+    func testResetForReconnectKeepsDurableSessionID() {
+        let s = makeSession(messages: [Message(role: .user, text: "hi")],
+                            storedSessionID: "durable-abc123")
+        s.resetForReconnect()
+        XCTAssertNil(s.serverSessionID, "dead runtime id must be cleared")
+        XCTAssertEqual(s.storedSessionID, "durable-abc123", "durable id must survive reconnect")
     }
 }

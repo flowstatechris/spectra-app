@@ -1,14 +1,16 @@
 import Foundation
 
 /// On-disk snapshot for instant cold-launch (spec §10): backend URL, added
-/// profiles, and per-profile message history. NOT the server session id — the
-/// gateway reaps orphaned sessions on ws disconnect (`ws_orphan_reap`), so a
-/// persisted session id is guaranteed dead by next launch. Cached messages give
-/// view continuity only; the first send after relaunch opens a fresh session.
+/// profiles, per-profile message history, and the durable Hermes session key.
+/// The *runtime* session id is never persisted — the gateway reaps orphaned
+/// sessions on ws disconnect (`ws_orphan_reap`), so it's dead by next launch.
+/// The durable `stored_session_id` survives, letting the first send after
+/// relaunch resume the same conversation instead of forking a new one.
 public struct PersistedState: Codable, Sendable {
     public struct Session: Codable, Sendable {
         public var profile: ProfileInfo
         public var messages: [Message]
+        public var storedSessionID: String?   // optional: old snapshots decode fine
     }
     public var backendURL: URL
     public var activeProfileName: String?

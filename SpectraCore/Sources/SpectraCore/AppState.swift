@@ -92,7 +92,8 @@ public final class AppState {
         for name in snap.order {
             guard let cached = snap.sessions.first(where: { $0.profile.name == name }) else { continue }
             sessions[name] = ProfileSession(profile: cached.profile, rpc: connection,
-                                            restoring: cached.messages)
+                                            restoring: cached.messages,
+                                            storedSessionID: cached.storedSessionID)
         }
         activeProfileName = snap.activeProfileName ?? sessions.keys.sorted().first
         if !sessions.isEmpty { phase = .ready }
@@ -141,8 +142,9 @@ public final class AppState {
             if intentionalDisconnect { return }
             do {
                 try await rpc.connect()
-                // Server reaped our sessions on the drop — restart each fresh
-                // (cached messages stay for continuity; next send re-creates).
+                // Server reaped the runtime sessions on the drop. Clear the dead
+                // runtime ids (cached messages + durable ids stay); the next send
+                // resumes each durable conversation rather than forking a new one.
                 for s in sessions.values { s.resetForReconnect() }
                 try? await loadProfiles()
                 connectionError = nil
@@ -216,7 +218,8 @@ public final class AppState {
             activeProfileName: activeProfileName,
             order: order,
             sessions: order.compactMap { name in
-                sessions[name].map { PersistedState.Session(profile: $0.profile, messages: $0.messages) }
+                sessions[name].map { PersistedState.Session(profile: $0.profile, messages: $0.messages,
+                                                             storedSessionID: $0.storedSessionID) }
             })
         Persistence.save(snap)
     }
