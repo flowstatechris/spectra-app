@@ -42,6 +42,17 @@ public final class ProfileSession: Identifiable {
         status = .idle
     }
 
+    /// After a socket drop + reconnect: the server reaped this session, so drop
+    /// the dead id and any in-flight prompts. Cached messages stay on screen;
+    /// the next send() opens a fresh server session.
+    public func resetForReconnect() {
+        serverSessionID = nil
+        streamingMessageID = nil
+        pendingApproval = nil
+        pendingClarify = nil
+        status = .idle
+    }
+
     // MARK: Sending
 
     public var canSend: Bool { pendingApproval == nil }

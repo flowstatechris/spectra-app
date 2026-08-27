@@ -12,6 +12,9 @@ struct ChatView: View {
         VStack(spacing: 0) {
             header
             Hairline()
+            if let error = app.connectionError {
+                offlineBanner(error)
+            }
             if let session = app.activeSession {
                 thread(session)
                 if let approval = session.pendingApproval {
@@ -32,6 +35,23 @@ struct ChatView: View {
         .paper()
         .animation(.snappy, value: app.activeSession?.pendingApproval)
         .animation(.snappy, value: app.activeSession?.pendingClarify)
+    }
+
+    /// Explicit, tappable offline state — never an infinite spinner (§12).
+    private func offlineBanner(_ text: String) -> some View {
+        Button { Task { await app.retryConnection() } } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "wifi.exclamationmark").accessibilityHidden(true)
+                Text(text).font(Theme.mono(12, .medium))
+                Spacer()
+                Text("RETRY").font(Theme.mono(11, .semibold, relativeTo: .caption2)).tracking(1.5)
+            }
+            .foregroundStyle(Theme.danger)
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .frame(maxWidth: .infinity)
+            .background(Theme.danger.opacity(0.08))
+        }
+        .accessibilityLabel("Connection lost. \(text) Tap to retry.")
     }
 
     private var header: some View {

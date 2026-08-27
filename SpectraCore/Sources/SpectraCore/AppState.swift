@@ -21,7 +21,11 @@ public final class AppState {
     public private(set) var sessions: [String: ProfileSession] = [:]  // key = profile name
     public var activeProfileName: String?
     public private(set) var connectionState: HermesRPCConnection.State = .disconnected
+    public private(set) var connectionError: String?            // set when reconnect retries exhaust (§12)
     public private(set) var activityFeed: [ActivityItem] = []   // cross-profile, newest first
+
+    private var reconnecting = false
+    private var intentionalDisconnect = false
 
     public private(set) var auth: HermesAuthClient?
     private var rpc: HermesRPCConnection?
@@ -104,11 +108,57 @@ public final class AppState {
 
     private func connectRPC() async throws {
         guard let auth else { return }
+        intentionalDisconnect = false
         let connection = rpc ?? HermesRPCConnection(auth: auth)  // reuse hydrated one
         rpc = connection
         try await connection.connect()
+        connectionError = nil
         startEventRouter(connection)
         startStateWatcher(connection)
+    }
+
+    // MARK: Reconnect / offline (spec §12)
+
+    /// Bounded backoff — the orb shows `.connecting` between attempts; on
+    /// exhaustion we surface an explicit error (never an infinite spinner).
+    private func reconnectWithBackoff() async {
+        guard let rpc, !reconnecting else { return }
+        reconnecting = true
+        defer { reconnecting = false }
+        for delaySec in [UInt64(1), 2, 4, 8, 15] {
+            try? await Task.sleep(nanoseconds: delaySec * 1_000_000_000)
+            if intentionalDisconnect { return }
+            do {
+                try await rpc.connect()
+                // Server reaped our sessions on the drop — restart each fresh
+                // (cached messages stay for continuity; next send re-creates).
+                for s in sessions.values { s.resetForReconnect() }
+                try? await loadProfiles()
+                connectionError = nil
+                return
+            } catch let e as HermesAuthError where e == .sessionExpired {
+                await forceRelogin()          // tokens gone — don't silently fail sends
+                return
+            } catch {
+                continue                       // unreachable / ticket-mint failure: keep trying
+            }
+        }
+        connectionError = "Can't reach \(backend?.displayName ?? "your backend")."
+    }
+
+    /// Manual retry from the offline banner.
+    public func retryConnection() async {
+        connectionError = nil
+        await reconnectWithBackoff()
+    }
+
+    private func forceRelogin() async {
+        await auth?.logout()
+        sessions = [:]
+        availableProfiles = []
+        activeProfileName = nil
+        connectionError = nil
+        phase = .needsLogin
     }
 
     private func loadProfiles() async throws {
@@ -193,6 +243,11 @@ public final class AppState {
         stateWatcher = Task {
             for await s in await connection.stateChanges() {
                 connectionState = s
+                if s == .connected { connectionError = nil }
+                // Unexpected drop while live → auto-reconnect (not on logout).
+                if s == .disconnected, !intentionalDisconnect, !reconnecting, phase == .ready {
+                    await reconnectWithBackoff()
+                }
             }
         }
     }
@@ -245,6 +300,7 @@ public final class AppState {
     }
 
     public func logout() async {
+        intentionalDisconnect = true    // suppress auto-reconnect on this drop
         await rpc?.disconnect()
         await auth?.logout()
         Persistence.clear()
