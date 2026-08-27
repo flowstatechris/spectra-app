@@ -61,7 +61,7 @@ struct ProfilesView: View {
             if app.activeProfileName == session.profile.name {
                 Eyebrow("Active", color: Theme.accent)
             }
-            Image(systemName: "chevron.right").font(.caption).foregroundStyle(Theme.muted)
+            Image(systemName: "chevron.right").font(.caption).foregroundStyle(Theme.muted).accessibilityHidden(true)
         }
         .padding(16)
         .card(border: attention ? Theme.danger.opacity(0.4) : Theme.hairline)

@@ -108,6 +108,7 @@ struct ChatView: View {
                         .frame(width: 40, height: 40)
                         .background(canSend(session) ? Theme.accent : Theme.hairline, in: Circle())
                 }
+                .accessibilityLabel("Send message")
                 .accessibilityIdentifier("sendButton")
                 .disabled(!canSend(session))
             }
@@ -244,7 +245,7 @@ struct ClarifyCard: View {
                                     HStack {
                                         Text(choice).font(Theme.mono(13)).foregroundStyle(Theme.ink)
                                         Spacer()
-                                        Image(systemName: "arrow.up.right").font(.caption).foregroundStyle(Theme.muted)
+                                        Image(systemName: "arrow.up.right").font(.caption).foregroundStyle(Theme.muted).accessibilityHidden(true)
                                     }
                                     .padding(.vertical, 11).padding(.horizontal, 14)
                                     .background(Theme.plate, in: RoundedRectangle(cornerRadius: 10, style: .continuous))

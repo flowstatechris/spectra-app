@@ -21,12 +21,19 @@ enum Theme {
             ? UIColor(rgb: dark) : UIColor(rgb: light) })
     }
 
-    // Type
-    static func serif(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
-        .system(size: size, weight: weight, design: .serif)
+    // Type — fixed editorial sizes, but scaled through UIFontMetrics so every
+    // label honors Dynamic Type (§13). `relativeTo` anchors the scale curve:
+    // small labels track .caption, body copy .body, display .title.
+    static func serif(_ size: CGFloat, _ weight: Font.Weight = .regular,
+                      relativeTo style: UIFont.TextStyle = .body) -> Font {
+        .system(size: scaled(size, style), weight: weight, design: .serif)
     }
-    static func mono(_ size: CGFloat, _ weight: Font.Weight = .medium) -> Font {
-        .system(size: size, weight: weight, design: .monospaced)
+    static func mono(_ size: CGFloat, _ weight: Font.Weight = .medium,
+                     relativeTo style: UIFont.TextStyle = .body) -> Font {
+        .system(size: scaled(size, style), weight: weight, design: .monospaced)
+    }
+    private static func scaled(_ size: CGFloat, _ style: UIFont.TextStyle) -> CGFloat {
+        UIFontMetrics(forTextStyle: style).scaledValue(for: size)
     }
 }
 
@@ -47,7 +54,7 @@ struct Eyebrow: View {
     init(_ text: String, color: Color = Theme.muted) { self.text = text; self.color = color }
     var body: some View {
         Text(text.uppercased())
-            .font(Theme.mono(11, .medium))
+            .font(Theme.mono(11, .medium, relativeTo: .caption2))
             .tracking(2.2)
             .foregroundStyle(color)
     }

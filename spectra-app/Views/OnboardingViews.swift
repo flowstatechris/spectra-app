@@ -16,8 +16,10 @@ struct BackendConfigView: View {
                 .frame(width: 64, height: 64)
                 .foregroundStyle(Theme.ink)
             Text("Spectra")
-                .font(Theme.serif(52))
+                .font(Theme.serif(52, relativeTo: .largeTitle))
                 .foregroundStyle(Theme.ink)
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)   // hero shrinks to fit at AX sizes, never truncates
                 .padding(.top, 18)
             Text("Any Hermes instance. Your phone. One app.")
                 .font(Theme.mono(12))
