@@ -1,9 +1,10 @@
 import SwiftUI
 import SpectraCore
 
-/// Tasks tab (spec §8): cross-profile live activity feed, newest first.
-struct TasksView: View {
+/// Activity tab (spec §13): cross-profile live activity feed, newest first.
+struct ActivityView: View {
     @Environment(AppState.self) private var app
+    let onSelect: (ActivityItem) -> Void
 
     var body: some View {
         NavigationStack {
@@ -12,7 +13,10 @@ struct TasksView: View {
                     Eyebrow("Activity")
                         .padding(.horizontal, 24).padding(.top, 8)
                     ForEach(app.activityFeed) { item in
-                        ActivityRow(item: item)
+                        Button { onSelect(item) } label: { ActivityRow(item: item) }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("activity:\(item.id)")
+                            .accessibilityHint("Opens this event in Chat")
                     }
                     .padding(.horizontal, 24)
                 }
@@ -20,7 +24,7 @@ struct TasksView: View {
                 .padding(.bottom, 20)                              // .paper() covers the
             }                                                      // whole screen, not just
             .paper()                                               // the narrow empty-feed column
-            .navigationTitle("Tasks")
+            .navigationTitle("Activity")
             .navigationBarTitleDisplayMode(.inline)
             .overlay {
                 if app.activityFeed.isEmpty {
@@ -74,10 +78,11 @@ struct StatusPill: View {
 
     private var label: String {
         switch status {
-        case .inProgress: return "In progress"
-        case .inReview:   return "In review"
+        case .inProgress: return "Working"
+        case .inReview:   return "Waiting"
         case .success:    return "Success"
         case .failed:     return "Failed"
+        case .interrupted:return "Interrupted"
         }
     }
     private var color: Color {
@@ -86,6 +91,7 @@ struct StatusPill: View {
         case .inReview:   return Theme.muted
         case .success:    return Theme.ok
         case .failed:     return Theme.danger
+        case .interrupted:return Theme.muted
         }
     }
 

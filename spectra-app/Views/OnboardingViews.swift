@@ -109,6 +109,7 @@ struct LoginView: View {
             }
             Spacer(); Spacer()
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .paper()
     }
 

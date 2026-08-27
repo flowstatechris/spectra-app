@@ -7,10 +7,30 @@ final class PersistenceTests: XCTestCase {
     func testSnapshotRoundTrip() throws {
         let profile = ProfileInfo(dict: ["name": "trading", "model": "opus",
                                          "provider": "anthropic", "skill_count": 3])!
+        let approval = ApprovalRequest(sessionID: "s", payload: [
+            "request_id": "a1", "command": "rm scratch.txt", "choices": ["once", "deny"],
+        ])!
+        let clarify = ClarifyRequest(sessionID: "s", payload: [
+            "request_id": "c1", "question": "Environment?", "choices": ["Staging", "Prod"],
+        ])!
+        let timestamp = Date(timeIntervalSince1970: 1_800_000_000)
         let messages = [
-            Message(role: .user, text: "hey"),
+            Message(role: .user, text: "hey", attachment: .init(
+                name: "notes.txt", kind: .file, byteCount: 12,
+                contentType: "text/plain", reference: "@file:notes.txt")),
             Message(role: .agent, text: "hi", kind: .status),
+            Message(role: .agent, text: "", kind: .toolActivity(
+                ToolActivity(id: "t1", toolName: "terminal", context: "swift test",
+                             status: .succeeded, input: "swift test",
+                             output: "42 tests passed", duration: 4.8, exitCode: 0))),
             Message(role: .agent, text: "rm -rf tmp", kind: .approvalResolved(choice: "once")),
+            Message(role: .agent, text: "", kind: .approval(
+                ApprovalEvent(request: approval, state: .resolved(choice: "once", at: timestamp)))),
+            Message(role: .agent, text: "", kind: .clarification(
+                ClarificationEvent(request: clarify, answers: ["": "Staging"],
+                                   state: .answered(at: timestamp)))),
+            Message(role: .agent, text: "", kind: .error(
+                ErrorEvent(id: "e1", text: "Command timed out", at: timestamp))),
         ]
         let state = PersistedState(
             backendURL: URL(string: "http://10.0.0.182:9119")!,
@@ -25,7 +45,7 @@ final class PersistenceTests: XCTestCase {
         XCTAssertEqual(back.order, ["trading"])
         XCTAssertEqual(back.sessions.first?.profile, profile)
         XCTAssertEqual(back.sessions.first?.messages, messages)  // Equatable covers Kind
-        if case .approvalResolved(let c) = back.sessions.first?.messages.last?.kind {
+        if case .approvalResolved(let c) = back.sessions.first?.messages[3].kind {
             XCTAssertEqual(c, "once")
         } else { XCTFail("approvalResolved kind lost in round-trip") }
     }

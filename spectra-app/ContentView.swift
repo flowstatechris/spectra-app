@@ -2,9 +2,12 @@ import SwiftUI
 import SpectraCore
 
 struct ContentView: View {
+    private enum MainTab: Hashable { case chat, profiles, activity, settings }
+
     @Environment(AppState.self) private var app
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("appearance") private var appearanceRaw = Appearance.system.rawValue
+    @State private var selectedTab = MainTab.chat
 
     var body: some View {
         Group {
@@ -33,12 +36,17 @@ struct ContentView: View {
     }
 
     private var mainTabs: some View {
-        TabView {
-            Tab("Chat", systemImage: "bubble.left.and.text.bubble.right") { ChatView() }
-            Tab("Profiles", systemImage: "square.stack") { ProfilesView() }
+        TabView(selection: $selectedTab) {
+            Tab("Chat", systemImage: "bubble.left.and.text.bubble.right", value: .chat) { ChatView() }
+            Tab("Profiles", systemImage: "square.stack", value: .profiles) { ProfilesView() }
                 .badge(app.profilesNeedingAttention.count)
-            Tab("Tasks", systemImage: "circle.grid.2x2") { TasksView() }
-            Tab("Settings", systemImage: "gearshape") { SettingsView() }
+            Tab("Activity", systemImage: "circle.grid.2x2", value: .activity) {
+                ActivityView { item in
+                    app.openActivity(item)
+                    selectedTab = .chat
+                }
+            }
+            Tab("Settings", systemImage: "gearshape", value: .settings) { SettingsView() }
         }
     }
 }

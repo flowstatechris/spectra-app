@@ -48,6 +48,10 @@ public struct Message: Identifiable, Sendable, Equatable, Codable {
     public enum Kind: Equatable, Sendable, Codable {
         case plain
         case status                 // lifecycle/status lines, quieter render
+        case toolActivity(ToolActivity)
+        case approval(ApprovalEvent)
+        case clarification(ClarificationEvent)
+        case error(ErrorEvent)
         case approvalResolved(choice: String)  // green receipt (spec §8)
     }
 
@@ -55,10 +59,40 @@ public struct Message: Identifiable, Sendable, Equatable, Codable {
     /// can't fetch, so we keep a small downscaled JPEG to render inline. `name`
     /// is the server filename for reference.
     public struct Attachment: Sendable, Equatable, Codable {
+        public enum Kind: String, Sendable, Equatable, Codable { case image, file }
+
         public let name: String
         public let thumbnailJPEG: Data
-        public init(name: String, thumbnailJPEG: Data) {
-            self.name = name; self.thumbnailJPEG = thumbnailJPEG
+        public let kind: Kind
+        public let byteCount: Int?
+        public let contentType: String?
+        /// Hermes workspace reference returned by `file.attach`. Hidden from
+        /// the displayed user message, but prepended to the submitted prompt.
+        public let reference: String?
+
+        public init(name: String, thumbnailJPEG: Data = Data(), kind: Kind = .image,
+                    byteCount: Int? = nil, contentType: String? = nil,
+                    reference: String? = nil) {
+            self.name = name
+            self.thumbnailJPEG = thumbnailJPEG
+            self.kind = kind
+            self.byteCount = byteCount
+            self.contentType = contentType
+            self.reference = reference
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case name, thumbnailJPEG, kind, byteCount, contentType, reference
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            name = try c.decode(String.self, forKey: .name)
+            thumbnailJPEG = try c.decode(Data.self, forKey: .thumbnailJPEG)
+            kind = try c.decodeIfPresent(Kind.self, forKey: .kind) ?? .image
+            byteCount = try c.decodeIfPresent(Int.self, forKey: .byteCount)
+            contentType = try c.decodeIfPresent(String.self, forKey: .contentType)
+            reference = try c.decodeIfPresent(String.self, forKey: .reference)
         }
     }
 
@@ -113,10 +147,47 @@ public struct Message: Identifiable, Sendable, Equatable, Codable {
     }
 }
 
+/// One structured Hermes tool call embedded at its chronological position in Chat.
+/// Strings are captured from the wire instead of retaining untyped JSON so rows
+/// remain Codable for the existing lightweight thread cache.
+public struct ToolActivity: Identifiable, Sendable, Equatable, Codable {
+    public enum Status: String, Sendable, Equatable, Codable {
+        case running, succeeded, failed
+    }
+
+    public let id: String
+    public let toolName: String
+    public var context: String
+    public var status: Status
+    public var input: String?
+    public var output: String?
+    public var duration: Double?
+    public var exitCode: Int?
+    public var risk: String?
+    public var findings: [String]
+
+    public init(id: String, toolName: String, context: String = "",
+                status: Status = .running, input: String? = nil,
+                output: String? = nil, duration: Double? = nil,
+                exitCode: Int? = nil, risk: String? = nil,
+                findings: [String] = []) {
+        self.id = id
+        self.toolName = toolName
+        self.context = context
+        self.status = status
+        self.input = input
+        self.output = output
+        self.duration = duration
+        self.exitCode = exitCode
+        self.risk = risk
+        self.findings = findings
+    }
+}
+
 /// `approval.request` payload (verified: tui_gateway/server.py
 /// _approval_request_payload). `choices` is dynamic 2–4 options — render
 /// exactly what the server sent.
-public struct ApprovalRequest: Identifiable, Sendable, Equatable {
+public struct ApprovalRequest: Identifiable, Sendable, Equatable, Codable {
     public let id: String          // request_id
     public let sessionID: String
     public let command: String     // server-redacted
@@ -133,10 +204,28 @@ public struct ApprovalRequest: Identifiable, Sendable, Equatable {
     }
 }
 
+/// Durable state for an approval card at its chronological position in Chat.
+public struct ApprovalEvent: Identifiable, Sendable, Equatable, Codable {
+    public enum State: Sendable, Equatable, Codable {
+        case pending
+        case resolved(choice: String, at: Date)
+        case expired
+    }
+
+    public let request: ApprovalRequest
+    public var state: State
+    public var id: String { request.id }
+
+    public init(request: ApprovalRequest, state: State = .pending) {
+        self.request = request
+        self.state = state
+    }
+}
+
 /// `clarify.request` payload (verified: _clarify_block). Single-question
 /// form: {question, choices, multi_select?}. Batch form: {questions: [...]}.
-public struct ClarifyRequest: Identifiable, Sendable, Equatable {
-    public struct Question: Identifiable, Sendable, Equatable {
+public struct ClarifyRequest: Identifiable, Sendable, Equatable, Codable {
+    public struct Question: Identifiable, Sendable, Equatable, Codable {
         public let id: String       // qid ("" for single-question form)
         public let question: String
         public let choices: [String]
@@ -146,12 +235,14 @@ public struct ClarifyRequest: Identifiable, Sendable, Equatable {
     public let id: String           // request_id
     public let sessionID: String
     public let questions: [Question]
+    public let answers: [String: String]
     public var isBatch: Bool { questions.first?.id.isEmpty == false }
 
     public init?(sessionID: String, payload: [String: Any]) {
         guard let rid = payload["request_id"] as? String else { return nil }
         self.id = rid
         self.sessionID = sessionID
+        answers = payload["answers"] as? [String: String] ?? [:]
         if let batch = payload["questions"] as? [[String: Any]] {
             questions = batch.compactMap { q in
                 guard let text = q["question"] as? String else { return nil }
@@ -169,5 +260,39 @@ public struct ClarifyRequest: Identifiable, Sendable, Equatable {
             return nil
         }
         if questions.isEmpty { return nil }
+    }
+}
+
+/// Durable state for a clarification card and its progressively locked answers.
+public struct ClarificationEvent: Identifiable, Sendable, Equatable, Codable {
+    public enum State: Sendable, Equatable, Codable {
+        case pending
+        case answered(at: Date)
+        case expired
+    }
+
+    public let request: ClarifyRequest
+    public var answers: [String: String]
+    public var state: State
+    public var id: String { request.id }
+
+    public init(request: ClarifyRequest, answers: [String: String]? = nil,
+                state: State = .pending) {
+        self.request = request
+        self.answers = answers ?? request.answers
+        self.state = state
+    }
+}
+
+/// A user-visible failure tied to the conversation rather than a transient toast.
+public struct ErrorEvent: Identifiable, Sendable, Equatable, Codable {
+    public let id: String
+    public let text: String
+    public let at: Date
+
+    public init(id: String = UUID().uuidString, text: String, at: Date = Date()) {
+        self.id = id
+        self.text = text
+        self.at = at
     }
 }

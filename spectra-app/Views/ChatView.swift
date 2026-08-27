@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import UniformTypeIdentifiers
 import SpectraCore
 import ThinkingOrbsKit
 
@@ -9,6 +10,14 @@ struct ChatView: View {
     @Environment(AppState.self) private var app
     @State private var draft = ""
     @State private var pickerItem: PhotosPickerItem?
+    @State private var showingPhotoLibrary = false
+    @State private var showingCamera = false
+    @State private var showingFileImporter = false
+    @State private var stopping = false
+    @State private var scrolledIntoConversation = false
+    @State private var showingInitialHeader = true
+    @State private var showingStatusTransition = false
+    @State private var collapsedApprovalID: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,15 +28,9 @@ struct ChatView: View {
             }
             if let session = app.activeSession {
                 thread(session)
-                if let approval = session.pendingApproval {
-                    ApprovalCard(approval: approval, session: session)
-                        .padding(.horizontal, 16).padding(.bottom, 8)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-                if let clarify = session.pendingClarify {
-                    ClarifyCard(clarify: clarify, session: session)
-                        .padding(.horizontal, 16).padding(.bottom, 8)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                if let approval = session.pendingApproval,
+                   collapsedApprovalID == approval.id {
+                    approvalChip(approval)
                 }
                 inputBar(session)
             } else {
@@ -35,8 +38,27 @@ struct ChatView: View {
             }
         }
         .paper()
+        .animation(.snappy, value: compactHeader)
         .animation(.snappy, value: app.activeSession?.pendingApproval)
         .animation(.snappy, value: app.activeSession?.pendingClarify)
+        .task(id: app.activeProfileName) {
+            scrolledIntoConversation = false
+            showingInitialHeader = true
+            try? await Task.sleep(for: .seconds(1.2))
+            guard !Task.isCancelled else { return }
+            showingInitialHeader = false
+        }
+        .task(id: app.activeSession?.status) {
+            showingStatusTransition = false
+            guard scrolledIntoConversation else { return }
+            showingStatusTransition = true
+            try? await Task.sleep(for: .seconds(1.5))
+            guard !Task.isCancelled else { return }
+            showingStatusTransition = false
+        }
+        .onChange(of: app.activeSession?.pendingApproval?.id) {
+            collapsedApprovalID = nil
+        }
     }
 
     /// Explicit, tappable offline state — never an infinite spinner (§12).
@@ -57,15 +79,41 @@ struct ChatView: View {
     }
 
     private var header: some View {
-        VStack(spacing: 10) {
-            if let name = app.activeProfileName {
-                Eyebrow(name)
+        Group {
+            if compactHeader {
+                HStack(spacing: 10) {
+                    OrbView(status: app.activeSession?.status ?? .idle,
+                            connectionState: app.connectionState,
+                            size: .px20, showsLabel: false)
+                    Text("\(app.activeProfileName ?? "") · \(statusLabel)")
+                        .font(Theme.mono(12, .medium))
+                        .foregroundStyle(Theme.muted)
+                    Spacer()
+                }
+                .padding(.horizontal, 18).padding(.vertical, 10)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(app.activeProfileName ?? "Profile"), \(statusLabel)")
+            } else {
+                VStack(spacing: 10) {
+                    if let name = app.activeProfileName {
+                        Eyebrow(name)
+                    }
+                    OrbView(status: app.activeSession?.status ?? .idle,
+                            connectionState: app.connectionState, size: .px64)
+                }
+                .padding(.vertical, 16)
             }
-            OrbView(status: app.activeSession?.status ?? .idle,
-                    connectionState: app.connectionState, size: .px64)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 16)
+    }
+
+    private var compactHeader: Bool {
+        scrolledIntoConversation && !showingInitialHeader && !showingStatusTransition
+    }
+
+    private var statusLabel: String {
+        OrbView.label(for: app.activeSession?.status ?? .idle,
+                      connectionState: app.connectionState)
     }
 
     @ViewBuilder
@@ -74,19 +122,55 @@ struct ChatView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     ForEach(session.messages) { message in
-                        MessageRow(message: message).id(message.id)
+                        MessageRow(message: message, session: session,
+                                   collapsedApprovalID: $collapsedApprovalID)
+                            .id(message.id)
                     }
                 }
                 .padding(.horizontal, 18).padding(.vertical, 20)
             }
             .defaultScrollAnchor(.bottom)
             .scrollDismissesKeyboard(.immediately)
-            .onChange(of: session.messages.last?.text) {
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentOffset.y + geometry.contentInsets.top > 48
+            } action: { _, scrolled in
+                scrolledIntoConversation = scrolled
+            }
+            .onChange(of: session.messages.last) {
                 if let last = session.messages.last {
-                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }
+                    proxy.scrollTo(last.id, anchor: .bottom)
                 }
             }
+            .onAppear { scrollToActivity(in: session, proxy: proxy) }
+            .onChange(of: app.chatScrollTargetID) {
+                scrollToActivity(in: session, proxy: proxy)
+            }
         }
+    }
+
+    private func scrollToActivity(in session: ProfileSession, proxy: ScrollViewProxy) {
+        guard let target = app.chatScrollTargetID,
+              session.messages.contains(where: { $0.id == target }) else { return }
+        withAnimation(.easeOut(duration: 0.25)) {
+            proxy.scrollTo(target, anchor: .center)
+        }
+        app.clearChatScrollTarget()
+    }
+
+    private func approvalChip(_ approval: ApprovalRequest) -> some View {
+        Button { collapsedApprovalID = nil } label: {
+            HStack(spacing: 9) {
+                Image(systemName: "exclamationmark.shield.fill")
+                Text("Hermes needs permission").font(Theme.mono(12, .medium))
+                Spacer()
+                Image(systemName: "chevron.up").font(.caption)
+            }
+            .foregroundStyle(Theme.danger)
+            .padding(.horizontal, 16).padding(.vertical, 11)
+            .background(Theme.danger.opacity(0.08))
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Restores the permission request")
     }
 
     private var emptyState: some View {
@@ -111,40 +195,77 @@ struct ChatView: View {
                 pendingStrip(a, session)
             }
             HStack(spacing: 12) {
-                PhotosPicker(selection: $pickerItem, matching: .images) {
-                    Image(systemName: "paperclip")
+                Menu {
+                    Button { showingPhotoLibrary = true } label: {
+                        Label("Photo Library", systemImage: "photo.on.rectangle")
+                    }
+                    Button { showingCamera = true } label: {
+                        Label("Camera", systemImage: "camera")
+                    }
+                    .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+                    Button { showingFileImporter = true } label: {
+                        Label("File", systemImage: "doc")
+                    }
+                } label: {
+                    Image(systemName: "plus")
                         .font(.system(size: 17, weight: .medium))
                         .foregroundStyle(Theme.muted)
                         .frame(width: 40, height: 40)
                 }
-                .accessibilityLabel("Attach image")
+                .accessibilityLabel("Add attachment")
                 .disabled(!session.canSend)
 
                 TextField("", text: $draft, prompt:
-                    Text("Message \(session.profile.name)…").foregroundStyle(Theme.muted),
+                    Text(session.canSend
+                         ? "Message \(session.profile.name)…"
+                         : "Resolve permission request above")
+                        .foregroundStyle(Theme.muted),
                     axis: .vertical)
                     .font(Theme.mono(15))
                     .foregroundStyle(Theme.ink)
-                    .lineLimit(1...5)
+                    .lineLimit(1...6)
                     .disabled(!session.canSend)
                     .padding(.vertical, 10).padding(.horizontal, 16)
-                    .background(Theme.plate, in: Capsule())
+                    .background(Theme.plate,
+                                in: RoundedRectangle(cornerRadius: 22, style: .continuous))
 
-                Button {
-                    let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard canSend(session) else { return }
-                    draft = ""
-                    Task { await session.send(text) }
-                } label: {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 17, weight: .bold))
+                if session.isRunning {
+                    Button {
+                        stopping = true
+                        Task {
+                            _ = await session.interrupt()
+                            stopping = false
+                        }
+                    } label: {
+                        Group {
+                            if stopping { ProgressView().tint(Theme.paper) }
+                            else { Image(systemName: "stop.fill") }
+                        }
+                        .font(.system(size: 14, weight: .bold))
                         .foregroundStyle(Theme.paper)
                         .frame(width: 40, height: 40)
-                        .background(canSend(session) ? Theme.accent : Theme.hairline, in: Circle())
+                        .background(Theme.danger, in: Circle())
+                    }
+                    .accessibilityLabel("Stop Hermes")
+                    .accessibilityIdentifier("stopButton")
+                    .disabled(stopping)
+                } else {
+                    Button {
+                        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard canSend(session) else { return }
+                        draft = ""
+                        Task { await session.send(text) }
+                    } label: {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundStyle(Theme.paper)
+                            .frame(width: 40, height: 40)
+                            .background(canSend(session) ? Theme.accent : Theme.hairline, in: Circle())
+                    }
+                    .accessibilityLabel("Send message")
+                    .accessibilityIdentifier("sendButton")
+                    .disabled(!canSend(session))
                 }
-                .accessibilityLabel("Send message")
-                .accessibilityIdentifier("sendButton")
-                .disabled(!canSend(session))
             }
             .padding(.horizontal, 16).padding(.vertical, 12)
         }
@@ -159,22 +280,71 @@ struct ChatView: View {
                                       thumbnail: ui.jpeg(maxDim: 240, quality: 0.7))
             }
         }
+        .photosPicker(isPresented: $showingPhotoLibrary, selection: $pickerItem,
+                      matching: .images)
+        .sheet(isPresented: $showingCamera) {
+            CameraPicker { image in
+                Task {
+                    await app.attachImage(profileName: session.profile.name,
+                                          imageData: image.jpeg(maxDim: 1600, quality: 0.8),
+                                          thumbnail: image.jpeg(maxDim: 240, quality: 0.7),
+                                          filename: "camera.jpg")
+                }
+            }
+            .ignoresSafeArea()
+        }
+        .fileImporter(isPresented: $showingFileImporter, allowedContentTypes: [.data]) { result in
+            importFile(result, session: session)
+        }
     }
 
     private func pendingStrip(_ a: Message.Attachment, _ session: ProfileSession) -> some View {
         HStack(spacing: 10) {
-            if let img = UIImage(data: a.thumbnailJPEG) {
+            if a.kind == .image, let img = UIImage(data: a.thumbnailJPEG) {
                 Image(uiImage: img).resizable().scaledToFill()
                     .frame(width: 44, height: 44)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            } else {
+                Image(systemName: "doc.fill")
+                    .font(.title3).foregroundStyle(Theme.accent)
+                    .frame(width: 44, height: 44)
+                    .background(Theme.plate, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
-            Text(a.name).font(Theme.mono(11)).foregroundStyle(Theme.muted).lineLimit(1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(a.name).font(Theme.mono(11)).foregroundStyle(Theme.ink).lineLimit(1)
+                if let count = a.byteCount {
+                    Text(ByteCountFormatter.string(fromByteCount: Int64(count), countStyle: .file))
+                        .font(Theme.mono(10)).foregroundStyle(Theme.muted)
+                }
+            }
             Spacer()
             Button { session.setPendingAttachment(nil) } label: {
                 Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.muted)
             }.accessibilityLabel("Remove attachment")
         }
         .padding(.horizontal, 16).padding(.top, 10)
+    }
+
+    private func importFile(_ result: Result<URL, Error>, session: ProfileSession) {
+        guard case .success(let url) = result else {
+            if case .failure(let error) = result { session.noteError("Couldn't open file: \(error)") }
+            return
+        }
+        Task {
+            do {
+                let file = try await Task.detached {
+                    let scoped = url.startAccessingSecurityScopedResource()
+                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                    let type = try? url.resourceValues(forKeys: [.contentTypeKey]).contentType
+                    return (try Data(contentsOf: url), url.lastPathComponent,
+                            type?.preferredMIMEType ?? "application/octet-stream")
+                }.value
+                await app.attachFile(profileName: session.profile.name, data: file.0,
+                                     filename: file.1, mime: file.2)
+            } catch {
+                session.noteError("Couldn't open \(url.lastPathComponent): \(error)")
+            }
+        }
     }
 
     private func canSend(_ session: ProfileSession) -> Bool {
@@ -186,10 +356,15 @@ struct ChatView: View {
 
 struct MessageRow: View {
     let message: SpectraCore.Message
+    let session: ProfileSession
+    @Binding var collapsedApprovalID: String?
     @State private var showFullImage = false
 
     var body: some View {
         switch message.kind {
+        case .toolActivity(let activity):
+            ToolActivityRow(activity: activity)
+
         case .status:
             HStack(spacing: 8) {
                 Rectangle().fill(Theme.hairline).frame(width: 2)
@@ -198,6 +373,16 @@ struct MessageRow: View {
                     .foregroundStyle(Theme.muted)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+
+        case .approval(let event):
+            approvalRow(event)
+
+        case .clarification(let event):
+            clarificationRow(event)
+
+        case .error(let error):
+            EventReceipt(icon: "xmark.octagon.fill", title: "Error", detail: error.text,
+                         tint: Theme.danger, timestamp: error.at)
 
         case .approvalResolved(let choice):
             HStack(spacing: 10) {
@@ -219,15 +404,32 @@ struct MessageRow: View {
         case .plain:
             if message.role == .user {
                 VStack(alignment: .trailing, spacing: 6) {
-                    if let a = message.attachment, let img = UIImage(data: a.thumbnailJPEG) {
-                        Image(uiImage: img).resizable().scaledToFill()
-                            .frame(maxWidth: 200, maxHeight: 200)
-                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                            .onTapGesture { showFullImage = true }
-                            .accessibilityLabel("Attached image \(a.name). Tap to view full screen.")
-                            .fullScreenCover(isPresented: $showFullImage) {
-                                ImageViewer(data: a.thumbnailJPEG)
+                    if let a = message.attachment {
+                        if a.kind == .image, let img = UIImage(data: a.thumbnailJPEG) {
+                            Image(uiImage: img).resizable().scaledToFill()
+                                .frame(maxWidth: 200, maxHeight: 200)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .onTapGesture { showFullImage = true }
+                                .accessibilityLabel("Attached image \(a.name). Tap to view full screen.")
+                                .fullScreenCover(isPresented: $showFullImage) {
+                                    ImageViewer(data: a.thumbnailJPEG)
+                                }
+                        } else {
+                            HStack(spacing: 10) {
+                                Image(systemName: "doc.fill").foregroundStyle(Theme.accent)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(a.name).font(Theme.mono(12)).foregroundStyle(Theme.ink).lineLimit(1)
+                                    if let count = a.byteCount {
+                                        Text(ByteCountFormatter.string(fromByteCount: Int64(count),
+                                                                       countStyle: .file))
+                                            .font(Theme.mono(10)).foregroundStyle(Theme.muted)
+                                    }
+                                }
                             }
+                            .padding(12)
+                            .background(Theme.plate,
+                                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
                     }
                     if !message.text.isEmpty {
                         Text(message.text)
@@ -244,7 +446,15 @@ struct MessageRow: View {
                     Rectangle().fill(Theme.accent.opacity(0.5)).frame(width: 2)
                     VStack(alignment: .leading, spacing: 10) {
                         if !message.text.isEmpty {
-                            MarkdownText(text: message.text)   // §9: rendered markdown
+                            if session.status == .speaking,
+                               message.id == session.messages.last?.id {
+                                Text(message.text)
+                                    .font(Theme.mono(14))
+                                    .foregroundStyle(Theme.ink)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            } else {
+                                MarkdownText(text: message.text)   // §9: rendered markdown
+                            }
                         }
                         ForEach(message.media) { m in     // §9 receive-side
                             AgentMediaView(media: m)
@@ -255,18 +465,274 @@ struct MessageRow: View {
             }
         }
     }
+
+    @ViewBuilder private func approvalRow(_ event: ApprovalEvent) -> some View {
+        switch event.state {
+        case .pending:
+            if session.pendingApproval?.id == event.id,
+               collapsedApprovalID != event.id {
+                ApprovalCard(approval: event.request, session: session) {
+                    collapsedApprovalID = event.id
+                }
+            } else if session.pendingApproval?.id != event.id {
+                EventReceipt(icon: "clock.badge.exclamationmark", title: "Permission expired",
+                             detail: event.request.command, tint: Theme.muted)
+            }
+        case .resolved(let choice, let at):
+            if choice == "deny" {
+                EventReceipt(icon: "xmark.seal.fill", title: "Permission denied",
+                             detail: event.request.command, tint: Theme.danger, timestamp: at)
+            } else {
+                EventReceipt(icon: "checkmark.seal.fill",
+                             title: "Permission granted · \(choiceLabel(choice))",
+                             detail: event.request.command, tint: Theme.ok, timestamp: at)
+            }
+        case .expired:
+            EventReceipt(icon: "clock.badge.exclamationmark", title: "Permission expired",
+                         detail: event.request.command, tint: Theme.muted)
+        }
+    }
+
+    @ViewBuilder private func clarificationRow(_ event: ClarificationEvent) -> some View {
+        switch event.state {
+        case .pending:
+            if session.pendingClarify?.id == event.id {
+                ClarifyCard(event: event, session: session)
+            } else {
+                EventReceipt(icon: "clock.badge.exclamationmark", title: "Clarification expired",
+                             detail: event.request.questions.first?.question ?? "",
+                             tint: Theme.muted)
+            }
+        case .answered(let at):
+            EventReceipt(icon: "checkmark.circle.fill", title: "Answered · \(answerSummary(event))",
+                         detail: event.request.questions.first?.question ?? "",
+                         tint: Theme.ok, timestamp: at)
+        case .expired:
+            EventReceipt(icon: "clock.badge.exclamationmark", title: "Clarification expired",
+                         detail: event.request.questions.first?.question ?? "",
+                         tint: Theme.muted)
+        }
+    }
+
+    private func choiceLabel(_ choice: String) -> String {
+        switch choice {
+        case "once": return "Once"
+        case "session": return "This session"
+        case "always": return "Always"
+        case "deny": return "Denied"
+        default: return choice.capitalized
+        }
+    }
+
+    private func answerSummary(_ event: ClarificationEvent) -> String {
+        if event.answers.count == 1, let answer = event.answers.values.first, !answer.isEmpty {
+            return answer
+        }
+        return "\(event.answers.count) answers"
+    }
+}
+
+private struct EventReceipt: View {
+    let icon: String
+    let title: String
+    let detail: String
+    let tint: Color
+    var timestamp: Date?
+
+    init(icon: String, title: String, detail: String, tint: Color,
+         timestamp: Date? = nil) {
+        self.icon = icon; self.title = title; self.detail = detail
+        self.tint = tint; self.timestamp = timestamp
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon).foregroundStyle(tint)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline) {
+                    Eyebrow(title, color: tint)
+                    Spacer()
+                    if let timestamp {
+                        Text(timestamp.formatted(date: .omitted, time: .shortened))
+                            .font(Theme.mono(10)).foregroundStyle(Theme.muted)
+                    }
+                }
+                if !detail.isEmpty {
+                    Text(detail).font(Theme.mono(11)).foregroundStyle(Theme.muted).lineLimit(3)
+                }
+            }
+        }
+        .padding(12)
+        .background(tint.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .strokeBorder(tint.opacity(0.25), lineWidth: 1))
+    }
+}
+
+/// Quiet, expandable activity derived from structured tool lifecycle events.
+struct ToolActivityRow: View {
+    let activity: ToolActivity
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: expanded ? 12 : 0) {
+            Button { withAnimation(.snappy) { expanded.toggle() } } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 9) {
+                    Image(systemName: icon)
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(color)
+                        .frame(width: 14)
+                    Text(title)
+                        .font(Theme.mono(12, .medium))
+                        .foregroundStyle(Theme.muted)
+                    if !activity.context.isEmpty {
+                        Text("· \(activity.context)")
+                            .font(Theme.mono(11))
+                            .foregroundStyle(Theme.muted.opacity(0.8))
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Theme.muted.opacity(0.65))
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(title)\(activity.context.isEmpty ? "" : ", \(activity.context)")")
+            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+            .accessibilityHint("Double tap to \(expanded ? "collapse" : "show details")")
+
+            if expanded { details }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 7)
+    }
+
+    @ViewBuilder private var details: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let input = activity.input {
+                detailText(input)
+            }
+            if activity.duration != nil || activity.exitCode != nil {
+                HStack(spacing: 24) {
+                    if let duration = activity.duration {
+                        metric("Duration", String(format: "%.1fs", duration))
+                    }
+                    if let exitCode = activity.exitCode {
+                        metric("Exit code", "\(exitCode)")
+                    }
+                }
+            }
+            if let output = activity.output {
+                detailText(output)
+            }
+            if let risk = activity.risk {
+                VStack(alignment: .leading, spacing: 4) {
+                    Eyebrow("\(risk) output risk", color: Theme.danger)
+                    ForEach(activity.findings, id: \.self) { finding in
+                        Text(finding).font(Theme.mono(11)).foregroundStyle(Theme.danger)
+                    }
+                }
+            }
+        }
+        .padding(.leading, 23)
+    }
+
+    private func detailText(_ text: String) -> some View {
+        ScrollView([.horizontal, .vertical]) {
+            Text(text)
+                .font(Theme.mono(11))
+                .foregroundStyle(Theme.ink)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxHeight: 220)
+        .padding(10)
+        .background(Theme.plate, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+
+    private func metric(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Eyebrow(label)
+            Text(value).font(Theme.mono(11)).foregroundStyle(Theme.ink)
+        }
+    }
+
+    private var title: String {
+        let name = activity.toolName.lowercased()
+        if name.contains("web_search") || name == "search" || name.contains("browse") {
+            return phrase(running: "Searching the web", success: "Searched the web", failed: "Web search failed")
+        }
+        if name.contains("read") {
+            let file = activity.input.map { ($0 as NSString).lastPathComponent }
+            return phrase(running: "Reading\(file.map { " \($0)" } ?? "")",
+                          success: "Read\(file.map { " \($0)" } ?? "")",
+                          failed: "Read failed")
+        }
+        if name.contains("edit") || name.contains("write") || name.contains("patch") {
+            let file = activity.input.flatMap { input in
+                input.contains("\n") || input.hasPrefix("{") ? nil : (input as NSString).lastPathComponent
+            }
+            return phrase(running: "Editing\(file.map { " \($0)" } ?? " files")",
+                          success: "Edited\(file.map { " \($0)" } ?? " files")",
+                          failed: "Edit failed")
+        }
+        if name.contains("terminal") || name.contains("command") || name.contains("exec") {
+            return phrase(running: "Running command", success: "Ran command", failed: "Command failed")
+        }
+        if name.contains("test") {
+            return phrase(running: "Running tests", success: "Tests passed", failed: "Tests failed")
+        }
+        let readable = activity.toolName.replacingOccurrences(of: "_", with: " ")
+        return phrase(running: "Running \(readable)", success: "Ran \(readable)",
+                      failed: "\(readable.capitalized) failed")
+    }
+
+    private func phrase(running: String, success: String, failed: String) -> String {
+        switch activity.status {
+        case .running: return running
+        case .succeeded: return success
+        case .failed: return failed
+        }
+    }
+
+    private var icon: String {
+        switch activity.status {
+        case .running: return "chevron.right"
+        case .succeeded: return "checkmark"
+        case .failed: return "xmark"
+        }
+    }
+
+    private var color: Color {
+        switch activity.status {
+        case .running: return Theme.muted
+        case .succeeded: return Theme.ok
+        case .failed: return Theme.danger
+        }
+    }
 }
 
 /// Hard-block approval (spec §8): elevated, danger-edged, dynamic choices.
 struct ApprovalCard: View {
     let approval: ApprovalRequest
     let session: ProfileSession
+    let onCollapse: () -> Void
+    @State private var isSubmitting = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.shield.fill").foregroundStyle(Theme.danger)
                 Eyebrow("Approval required", color: Theme.danger)
+                Spacer()
+                Button(action: onCollapse) {
+                    Image(systemName: "chevron.down")
+                        .font(.caption).foregroundStyle(Theme.muted)
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Collapse permission request")
             }
             Text(approval.command)
                 .font(Theme.mono(12))
@@ -275,10 +741,23 @@ struct ApprovalCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(12)
                 .background(Theme.plate, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            HStack(spacing: 10) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 10)], spacing: 10) {
                 ForEach(approval.choices, id: \.self) { choice in
-                    Button(choice) { Task { await session.resolveApproval(choice: choice) } }
+                    Button(choiceLabel(choice)) {
+                        isSubmitting = true
+                        Task {
+                            let resolved = await session.resolveApproval(choice: choice)
+                            if !resolved { isSubmitting = false }
+                        }
+                    }
                         .buttonStyle(OutlineButton(tint: choice == "deny" ? Theme.danger : Theme.accent))
+                        .disabled(isSubmitting)
+                }
+            }
+            if isSubmitting {
+                HStack(spacing: 7) {
+                    ProgressView().controlSize(.small)
+                    Text("Sending decision…").font(Theme.mono(11)).foregroundStyle(Theme.muted)
                 }
             }
         }
@@ -288,13 +767,27 @@ struct ApprovalCard: View {
             .strokeBorder(Theme.danger.opacity(0.45), lineWidth: 1))
         .shadow(color: .black.opacity(0.12), radius: 20, y: 8)
     }
+
+    private func choiceLabel(_ choice: String) -> String {
+        switch choice {
+        case "once": return "Allow once"
+        case "session": return "This session"
+        case "always": return "Always allow"
+        case "deny": return "Deny"
+        default: return choice
+        }
+    }
 }
 
 /// Soft clarify (spec §8): choice rows or free text; ignorable.
 struct ClarifyCard: View {
-    let clarify: ClarifyRequest
+    let event: ClarificationEvent
     let session: ProfileSession
-    @State private var freeText = ""
+    @State private var freeText: [String: String] = [:]
+    @State private var selections: [String: Set<String>] = [:]
+    @State private var submitting: Set<String> = []
+
+    private var clarify: ClarifyRequest { event.request }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -304,38 +797,67 @@ struct ClarifyCard: View {
                     Text(q.question)
                         .font(Theme.serif(17))
                         .foregroundStyle(Theme.ink)
-                    if q.choices.isEmpty {
+                    if let answer = event.answers[q.id] {
+                        Label(answer, systemImage: "checkmark.circle.fill")
+                            .font(Theme.mono(12)).foregroundStyle(Theme.ok)
+                    } else if q.choices.isEmpty {
                         HStack(spacing: 10) {
-                            TextField("", text: $freeText, prompt:
+                            TextField("", text: textBinding(for: q.id), prompt:
                                 Text("Answer…").foregroundStyle(Theme.muted))
                                 .font(Theme.mono(14))
                                 .padding(.vertical, 9).padding(.horizontal, 12)
                                 .background(Theme.plate, in: Capsule())
                             Button("Send") {
-                                let t = freeText; freeText = ""
-                                Task { await session.answerClarify(questionID: q.id, answer: t) }
+                                submit(q, answer: freeText[q.id, default: ""])
                             }
                             .buttonStyle(OutlineButton(tint: Theme.accent))
-                            .disabled(freeText.isEmpty)
+                            .disabled(freeText[q.id, default: ""].isEmpty || submitting.contains(q.id))
                         }
                     } else {
                         VStack(spacing: 8) {
                             ForEach(q.choices, id: \.self) { choice in
                                 Button {
-                                    Task { await session.answerClarify(questionID: q.id, answer: choice) }
+                                    if q.multiSelect {
+                                        toggle(choice, for: q.id)
+                                    } else {
+                                        submit(q, answer: choice)
+                                    }
                                 } label: {
                                     HStack {
                                         Text(choice).font(Theme.mono(13)).foregroundStyle(Theme.ink)
                                         Spacer()
-                                        Image(systemName: "arrow.up.right").font(.caption).foregroundStyle(Theme.muted).accessibilityHidden(true)
+                                        Image(systemName: q.multiSelect
+                                              ? (selections[q.id, default: []].contains(choice)
+                                                 ? "checkmark.square.fill" : "square")
+                                              : "arrow.up.right")
+                                            .font(.caption).foregroundStyle(q.multiSelect ? Theme.accent : Theme.muted)
+                                            .accessibilityHidden(true)
                                     }
                                     .padding(.vertical, 11).padding(.horizontal, 14)
                                     .background(Theme.plate, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                                 }
                                 .buttonStyle(.plain)
+                                .disabled(submitting.contains(q.id))
+                            }
+                            if q.multiSelect {
+                                Button("Send selections") {
+                                    let selected = q.choices.filter {
+                                        selections[q.id, default: []].contains($0)
+                                    }
+                                    let data = try? JSONEncoder().encode(selected)
+                                    submit(q, answer: data.flatMap { String(data: $0, encoding: .utf8) } ?? "")
+                                }
+                                .buttonStyle(OutlineButton(tint: Theme.accent))
+                                .disabled(selections[q.id, default: []].isEmpty || submitting.contains(q.id))
                             }
                         }
                     }
+                }
+            }
+            if !submitting.isEmpty {
+                HStack(spacing: 7) {
+                    ProgressView().controlSize(.small)
+                    Text("Sending answer…").font(Theme.mono(11)).foregroundStyle(Theme.muted)
                 }
             }
         }
@@ -343,6 +865,26 @@ struct ClarifyCard: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
             .strokeBorder(Theme.hairline, lineWidth: 1))
+    }
+
+    private func textBinding(for id: String) -> Binding<String> {
+        Binding(get: { freeText[id, default: ""] }, set: { freeText[id] = $0 })
+    }
+
+    private func toggle(_ choice: String, for id: String) {
+        if selections[id, default: []].contains(choice) {
+            selections[id]?.remove(choice)
+        } else {
+            selections[id, default: []].insert(choice)
+        }
+    }
+
+    private func submit(_ question: ClarifyRequest.Question, answer: String) {
+        submitting.insert(question.id)
+        Task {
+            let accepted = await session.answerClarify(questionID: question.id, answer: answer)
+            if !accepted { submitting.remove(question.id) }
+        }
     }
 }
 
@@ -460,6 +1002,38 @@ private struct ShareSheet: UIViewControllerRepresentable {
         UIActivityViewController(activityItems: [url], applicationActivities: nil)
     }
     func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
+}
+
+/// Native camera bridge; SwiftUI still has no camera equivalent to PhotosPicker.
+private struct CameraPicker: UIViewControllerRepresentable {
+    let onImage: (UIImage) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onImage: onImage) }
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ controller: UIImagePickerController, context: Context) {}
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate,
+                             UINavigationControllerDelegate {
+        let onImage: (UIImage) -> Void
+        init(onImage: @escaping (UIImage) -> Void) { self.onImage = onImage }
+
+        func imagePickerController(_ picker: UIImagePickerController,
+                                   didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            if let image = info[.originalImage] as? UIImage { onImage(image) }
+            picker.dismiss(animated: true)
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            picker.dismiss(animated: true)
+        }
+    }
 }
 
 extension URL: @retroactive Identifiable { public var id: String { absoluteString } }

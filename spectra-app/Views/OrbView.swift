@@ -21,7 +21,8 @@ struct OrbView: View {
         }
     }
 
-    private var label: String {
+    static func label(for status: SessionStatus,
+                      connectionState: HermesRPCConnection.State) -> String {
         if connectionState == .connecting { return "Connecting" }
         if connectionState == .disconnected { return "Offline" }
         switch status {
@@ -32,6 +33,8 @@ struct OrbView: View {
         case .alert: return "Needs you"
         }
     }
+
+    private var label: String { Self.label(for: status, connectionState: connectionState) }
 
     private var isAlert: Bool { if case .alert = status { return true }; return false }
 

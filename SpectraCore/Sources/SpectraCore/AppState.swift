@@ -23,6 +23,7 @@ public final class AppState {
     public private(set) var connectionState: HermesRPCConnection.State = .disconnected
     public private(set) var connectionError: String?            // set when reconnect retries exhaust (§12)
     public private(set) var activityFeed: [ActivityItem] = []   // cross-profile, newest first
+    public private(set) var chatScrollTargetID: String?
 
     private var reconnecting = false
     private var intentionalDisconnect = false
@@ -42,6 +43,13 @@ public final class AppState {
         Set(sessions.values.filter { $0.pendingApproval != nil || $0.pendingClarify != nil }
             .map(\.profile.name))
     }
+
+    public func openActivity(_ item: ActivityItem) {
+        activeProfileName = item.profileName
+        chatScrollTargetID = item.targetMessageID
+    }
+
+    public func clearChatScrollTarget() { chatScrollTargetID = nil }
 
     // MARK: Backend + auth
 
@@ -235,6 +243,34 @@ public final class AppState {
         }
     }
 
+    /// Stage a non-image file with Hermes and retain its rewritten `@file:`
+    /// reference for the next prompt. One pending attachment matches the
+    /// existing image composer model; selecting another replaces it.
+    public func attachFile(profileName: String, data: Data, filename: String,
+                           mime: String) async {
+        guard let session = sessions[profileName], let rpc else { return }
+        do {
+            try await session.ensureSession()
+            guard let sid = session.serverSessionID else { return }
+            let dataURL = "data:\(mime);base64,\(data.base64EncodedString())"
+            let result = try await rpc.call("file.attach", params: [
+                "session_id": sid,
+                "name": filename,
+                "data_url": dataURL,
+            ])
+            guard result["attached"] as? Bool == true,
+                  let reference = result["ref_text"] as? String else {
+                session.noteError("Couldn't attach \(filename)")
+                return
+            }
+            session.setPendingAttachment(.init(name: filename, kind: .file,
+                                                byteCount: data.count, contentType: mime,
+                                                reference: reference))
+        } catch {
+            session.noteError("Couldn't attach \(filename): \(error)")
+        }
+    }
+
     /// Fetch agent-sent media bytes (§9 receive-side), cached so scrolling
     /// doesn't refetch. Returns nil if not logged in / fetch fails — the view
     /// falls back to a placeholder card.
@@ -315,11 +351,11 @@ public final class AppState {
         }
     }
 
-    // MARK: Activity feed (Tasks tab)
+    // MARK: Activity feed
 
     private static let feedCap = 200
     private static let persistTriggers: Set<String> =
-        ["message.complete", "approval.request", "clarify.request", "turn.error"]
+        ["message.complete", "approval.request", "clarify.request", "turn.error", "turn.end"]
 
     /// Fold tool/turn events into the cross-profile feed. Linear scan on
     /// completion (feed is capped at 200 — swap for a tool_id index only if
@@ -348,6 +384,10 @@ public final class AppState {
             if let idx = activityFeed.firstIndex(where: {
                 $0.profileName == profileName && $0.status == .inProgress }) {
                 activityFeed[idx].status = .inReview
+                if let requestID = event.payload?["request_id"] as? String {
+                    let prefix = event.type == "approval.request" ? "approval" : "clarify"
+                    activityFeed[idx].targetMessageID = "\(prefix):\(requestID)"
+                }
             }
 
         case "turn.error":
@@ -355,7 +395,18 @@ public final class AppState {
                 $0.profileName == profileName &&
                 ($0.status == .inProgress || $0.status == .inReview) }) {
                 activityFeed[idx].status = .failed
+                if let messageID = sessions[profileName]?.messages.last?.id {
+                    activityFeed[idx].targetMessageID = messageID
+                }
             }
+
+        case "turn.end":
+            guard event.payload?["interrupted"] as? Bool == true,
+                  let idx = activityFeed.firstIndex(where: {
+                      $0.profileName == profileName &&
+                      ($0.status == .inProgress || $0.status == .inReview)
+                  }) else { return }
+            activityFeed[idx].status = .interrupted
 
         default:
             break
