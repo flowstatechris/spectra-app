@@ -231,7 +231,7 @@ struct BackendConfig: Identifiable {
 ## 5. Onboarding flow
 
 1. **Add backend** — `BackendConfigView`: text field for base URL. No manual channel-entry fallback needed (`/api/status` is public and real).
-2. **Login** — triggers system-browser OAuth against that backend. Loading state: **orb spinning (`.connecting`) + "Setting up your workspace"**. On failure after retry: full error screen (app is unusable without a working backend connection — no silent infinite spinner, no degraded offline mode on first launch).
+2. **Login** — OAuth via `ASWebAuthenticationSession` (in-app browser sheet that auto-dismisses back to the app on callback — no manual Safari→app switch). The RFC 8252 loopback catcher + PKCE flow (§4) is unchanged underneath; the loopback response just JS-bounces to `spectra://auth-done`, which the session's `callbackURLScheme` catches to close the sheet. Loading state: **orb spinning (`.connecting`) + "Setting up your workspace"**. On failure after retry: full error screen (app is unusable without a working backend connection — no silent infinite spinner, no degraded offline mode on first launch).
 3. **Profile picker** — `GET /api/status` populates a checklist of discoverable profiles. **User selects which to add — not auto-add-all** (respects the 16-session cap; a backend with 8+ profiles shouldn't silently burn toward the ceiling). Include a **"Select all"** button for convenience.
 4. On confirm: `AppState.addProfile()` for each selected profile, each auto-connects immediately (opens all three connection types — see §6).
 
@@ -302,7 +302,7 @@ Flat, single-level sectioned list:
 
 ## 9. Message rendering
 
-- **Plain text and code: inline, plain monospace.** No syntax highlighting in v1.
+- **Agent markdown is rendered** (past v1's plain-mono): headings, bullet/numbered lists, blockquotes, rules, and inline **bold**/*italic*/`code`/links (SwiftUI native inline). Fenced code blocks render monospaced on a surface card, horizontally scrollable, with a language label and a copy button. No syntax *highlighting* inside code blocks (still deferred). User messages stay plain.
 - **Files: a card** — icon, name, size, open/share action.
 - **Images: inline** — small thumbnail, tap to view full-screen (uses the §2.6 upload flow to send).
 

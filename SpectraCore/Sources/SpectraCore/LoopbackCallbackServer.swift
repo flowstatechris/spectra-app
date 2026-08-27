@@ -86,8 +86,16 @@ public final class LoopbackCallbackServer: @unchecked Sendable {
                 respond(conn, status: "404 Not Found", body: "")
                 continue
             }
+            // 200 + HTML with a JS bounce to the app's custom scheme. In an
+            // ASWebAuthenticationSession the bounce is caught by callbackURLScheme
+            // and the sheet auto-dismisses back to the app; in a plain browser it
+            // just shows the message. (Plain 200 keeps the live auth test happy —
+            // it reads this body over URLSession, which won't run the script.)
             respond(conn, status: "200 OK",
-                    body: "<html><body><p>Signed in — you can return to Spectra.</p></body></html>")
+                    body: "<html><body style=\"font-family:-apple-system;text-align:center;padding-top:48px;color:#111\">"
+                        + "<p>Signed in — returning to Spectra…</p>"
+                        + "<script>location.replace('spectra://auth-done')</script>"
+                        + "</body></html>")
             var params: [String: String] = [:]
             for item in items { params[item.name] = item.value }
             return params

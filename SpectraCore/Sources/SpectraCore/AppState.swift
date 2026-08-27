@@ -91,12 +91,14 @@ public final class AppState {
 
     /// Begin interactive login. Returns the URL to open in the system browser;
     /// completes when the loopback callback lands.
-    public func login(present: (URL) -> Void) async {
+    /// `present` opens the auth URL; its second arg cancels the pending loopback
+    /// (call it if the user dismisses the browser sheet, so finishLogin doesn't hang).
+    public func login(present: (URL, @escaping () -> Void) -> Void) async {
         guard let auth else { return }
         phase = .loggingIn
         do {
             let pending = try await auth.beginLogin()
-            present(pending.authorizeURL)
+            present(pending.authorizeURL, { pending.cancel() })
             _ = try await auth.finishLogin(pending)
             try await connectRPC()
             try await loadProfiles()

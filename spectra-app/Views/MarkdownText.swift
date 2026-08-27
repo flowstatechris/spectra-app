@@ -44,18 +44,7 @@ struct MarkdownText: View {
             }
 
         case .code(let lang, let code):
-            VStack(alignment: .leading, spacing: 4) {
-                if let lang { Eyebrow(lang, color: Theme.muted) }
-                ScrollView(.horizontal, showsIndicators: false) {
-                    Text(code).font(Theme.mono(12.5)).foregroundStyle(Theme.ink)
-                        .textSelection(.enabled)
-                        .padding(12)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Theme.hairline, lineWidth: 1))
+            CodeBlock(language: lang, code: code)
 
         case .quote(let s):
             HStack(alignment: .top, spacing: 10) {
@@ -68,7 +57,7 @@ struct MarkdownText: View {
         }
     }
 
-    private func marker(_ mark: String, _ item: String) -> some View {
+    private func marker(_ mark: String, _ item: String) -> some View {  // list row
         HStack(alignment: .top, spacing: 8) {
             Text(mark).font(Theme.mono(14)).foregroundStyle(Theme.muted)
                 .frame(minWidth: 16, alignment: .trailing)
@@ -86,5 +75,42 @@ struct MarkdownText: View {
             markdown: s,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
             ?? AttributedString(s)
+    }
+}
+
+/// Fenced code block: monospace on a surface card, horizontally scrollable,
+/// with a language label and a copy button (checkmark on tap).
+private struct CodeBlock: View {
+    let language: String?
+    let code: String
+    @State private var copied = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                if let language { Eyebrow(language, color: Theme.muted) }
+                Spacer(minLength: 8)
+                Button {
+                    UIPasteboard.general.string = code
+                    copied = true
+                    Task { try? await Task.sleep(for: .seconds(1.2)); copied = false }
+                } label: {
+                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 12))
+                        .foregroundStyle(copied ? Theme.ok : Theme.muted)
+                }
+                .accessibilityLabel(copied ? "Copied" : "Copy code")
+            }
+            .padding(.horizontal, 12).padding(.top, 8)
+            ScrollView(.horizontal, showsIndicators: false) {
+                Text(code).font(Theme.mono(12.5)).foregroundStyle(Theme.ink)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 12).padding(.bottom, 12)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .strokeBorder(Theme.hairline, lineWidth: 1))
     }
 }

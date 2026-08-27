@@ -113,7 +113,9 @@ struct LoginView: View {
     }
 
     private func signIn() async {
-        await app.login { url in UIApplication.shared.open(url) }
+        await app.login { url, cancel in
+            AuthPresenter.shared.start(url: url, onCancel: cancel)
+        }
     }
 }
 
