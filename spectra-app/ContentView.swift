@@ -1,14 +1,38 @@
 import SwiftUI
 import SpectraCore
-import ThinkingOrbsKit
 
-// Temporary wiring check — replaced by real screens in the UI slice.
 struct ContentView: View {
+    @Environment(AppState.self) private var app
+    @Environment(\.scenePhase) private var scenePhase
+
     var body: some View {
-        VStack(spacing: 24) {
-            ThinkingOrb(state: .breathing, size: .px64)
-            Text("Spectra")
-                .font(.title2)
+        Group {
+            switch app.phase {
+            case .needsBackend:
+                BackendConfigView()
+            case .needsLogin, .loggingIn, .error:
+                LoginView()
+            case .pickingProfiles:
+                ProfilePickerView()
+            case .ready:
+                mainTabs
+            }
+        }
+        .task { await app.restoreOnLaunch() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await app.refreshAll() } }
+        }
+    }
+
+    private var mainTabs: some View {
+        TabView {
+            Tab("Chat", systemImage: "bubble.left.and.text.bubble.right") {
+                ChatView()
+            }
+            Tab("Profiles", systemImage: "person.2") {
+                ProfilesView()
+            }
+            .badge(app.profilesNeedingAttention.count)
         }
     }
 }

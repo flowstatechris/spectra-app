@@ -591,6 +591,7 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
 /* Begin XCLocalSwiftPackageReference section */
 		FA00000000000000000000A1 /* XCLocalSwiftPackageReference "vendor/Libraries/packages/thinking-orbs/ports/ios/ThinkingOrbsKit" */ = {
 			isa = XCLocalSwiftPackageReference;
@@ -612,7 +613,6 @@
 			productName = SpectraCore;
 		};
 /* End XCSwiftPackageProductDependency section */
-
 	};
 	rootObject = F93921BB303FB95E00990001 /* Project object */;
 }
