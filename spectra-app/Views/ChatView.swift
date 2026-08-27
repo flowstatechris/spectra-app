@@ -58,6 +58,7 @@ struct ChatView: View {
                 .padding(.horizontal, 18).padding(.vertical, 20)
             }
             .defaultScrollAnchor(.bottom)
+            .scrollDismissesKeyboard(.immediately)
             .onChange(of: session.messages.last?.text) {
                 if let last = session.messages.last {
                     withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }

@@ -105,3 +105,18 @@ struct OutlineButton: ButtonStyle {
             .opacity(configuration.isPressed ? 0.6 : 1)
     }
 }
+
+// MARK: - Appearance
+
+enum Appearance: String, CaseIterable, Identifiable {
+    case system, light, dark
+    var id: String { rawValue }
+    var label: String { rawValue.capitalized }
+    var scheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light:  return .light
+        case .dark:   return .dark
+        }
+    }
+}

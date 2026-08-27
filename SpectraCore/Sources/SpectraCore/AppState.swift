@@ -21,6 +21,7 @@ public final class AppState {
     public private(set) var sessions: [String: ProfileSession] = [:]  // key = profile name
     public var activeProfileName: String?
     public private(set) var connectionState: HermesRPCConnection.State = .disconnected
+    public private(set) var activityFeed: [ActivityItem] = []   // cross-profile, newest first
 
     public private(set) var auth: HermesAuthClient?
     private var rpc: HermesRPCConnection?
@@ -132,6 +133,7 @@ public final class AppState {
                 // Route by server session id → owning ProfileSession.
                 if let session = sessions.values.first(where: { $0.serverSessionID == event.sessionID }) {
                     session.handle(event)
+                    recordActivity(profileName: session.profile.name, event: event)
                 }
             }
         }
@@ -146,6 +148,51 @@ public final class AppState {
         }
     }
 
+    // MARK: Activity feed (Tasks tab)
+
+    private static let feedCap = 200
+
+    /// Fold tool/turn events into the cross-profile feed. Linear scan on
+    /// completion (feed is capped at 200 — swap for a tool_id index only if
+    /// that ever shows up in a profile). ponytail: O(n) flip, n<=200.
+    private func recordActivity(profileName: String, event: HermesRPCConnection.Event) {
+        switch event.type {
+        case "tool.start":
+            guard let toolID = event.payload?["tool_id"] as? String else { return }
+            let name = event.payload?["name"] as? String ?? "tool"
+            let context = event.payload?["context"] as? String ?? name
+            activityFeed.insert(ActivityItem(id: toolID, profileName: profileName,
+                                             toolName: name, context: context,
+                                             status: .inProgress), at: 0)
+            if activityFeed.count > Self.feedCap { activityFeed.removeLast() }
+
+        case "tool.complete":
+            guard let toolID = event.payload?["tool_id"] as? String,
+                  let idx = activityFeed.firstIndex(where: { $0.id == toolID }) else { return }
+            activityFeed[idx].status = .success
+            activityFeed[idx].duration = event.payload?["duration_s"] as? Double
+            if let summary = event.payload?["summary"] as? String, !summary.isEmpty {
+                activityFeed[idx].context = summary
+            }
+
+        case "approval.request", "clarify.request":
+            if let idx = activityFeed.firstIndex(where: {
+                $0.profileName == profileName && $0.status == .inProgress }) {
+                activityFeed[idx].status = .inReview
+            }
+
+        case "turn.error":
+            if let idx = activityFeed.firstIndex(where: {
+                $0.profileName == profileName &&
+                ($0.status == .inProgress || $0.status == .inReview) }) {
+                activityFeed[idx].status = .failed
+            }
+
+        default:
+            break
+        }
+    }
+
     public func logout() async {
         await rpc?.disconnect()
         await auth?.logout()
@@ -153,6 +200,7 @@ public final class AppState {
         stateWatcher?.cancel()
         sessions = [:]
         availableProfiles = []
+        activityFeed = []
         activeProfileName = nil
         phase = .needsLogin
     }

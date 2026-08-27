@@ -4,6 +4,7 @@ import SpectraCore
 struct ContentView: View {
     @Environment(AppState.self) private var app
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("appearance") private var appearanceRaw = Appearance.system.rawValue
 
     var body: some View {
         Group {
@@ -19,6 +20,7 @@ struct ContentView: View {
             }
         }
         .tint(Theme.accent)
+        .preferredColorScheme(Appearance(rawValue: appearanceRaw)?.scheme)
         .task { await app.restoreOnLaunch() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await app.refreshAll() } }
@@ -30,6 +32,8 @@ struct ContentView: View {
             Tab("Chat", systemImage: "bubble.left.and.text.bubble.right") { ChatView() }
             Tab("Profiles", systemImage: "square.stack") { ProfilesView() }
                 .badge(app.profilesNeedingAttention.count)
+            Tab("Tasks", systemImage: "circle.grid.2x2") { TasksView() }
+            Tab("Settings", systemImage: "gearshape") { SettingsView() }
         }
     }
 }

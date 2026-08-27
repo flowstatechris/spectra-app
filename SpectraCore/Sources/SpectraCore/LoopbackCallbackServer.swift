@@ -70,6 +70,14 @@ public final class LoopbackCallbackServer: @unchecked Sendable {
             let conn = accept(listenFD, nil, nil)
             guard conn >= 0 else { throw HermesAuthError.loopbackListenFailed } // fd closed = cancelled
             defer { close(conn) }
+            // Per-connection receive timeout: Safari opens speculative preconnect
+            // sockets that send nothing. Without this the blocking read() below
+            // wedges the single accept loop on a silent connection and the real
+            // ?code= callback never gets accepted (login hangs forever).
+            // ponytail: 5s head-of-line delay per silent preconnect; thread-per-
+            // connection only if that ever bites.
+            var tv = timeval(tv_sec: 5, tv_usec: 0)
+            setsockopt(conn, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
             guard let target = readRequestTarget(conn) else { continue }
             guard let components = URLComponents(string: target),
                   components.path == "/callback",
