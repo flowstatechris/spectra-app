@@ -1,0 +1,3 @@
+[submodule "vendor/Libraries"]
+	path = vendor/Libraries
+	url = https://github.com/Jakubantalik/Libraries.git

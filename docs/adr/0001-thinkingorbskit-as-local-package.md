@@ -1,0 +1,5 @@
+# ThinkingOrbsKit as a git submodule + local package, not a remote SPM dependency
+
+The spec (§1) requires `ThinkingOrbsKit` from `github.com/Jakubantalik/Libraries`. The published install instructions say to add it as a normal remote SPM package (`.package(url: ".../Libraries.git", from: "0.3.1")`) via Xcode's Add Package Dependency. Verified against the GitHub API directly: that repo has no `Package.swift` at its root on any tag (`v1.2.0`, `v1.3.0`, `1.4.0`) or on `main`, and no `0.3.1` tag exists at all — it's an npm-workspaces monorepo; the real manifest lives four folders deep at `packages/thinking-orbs/ports/ios/ThinkingOrbsKit/Package.swift`. A remote URL dependency requires the manifest at repo root, so the documented install path cannot resolve.
+
+Decided to add `Libraries` as a git submodule and reference the nested `ThinkingOrbsKit` folder as a local Swift package instead — local package references don't require a root manifest, only remote ones do. If the upstream repo ever grows a proper root manifest (or a dedicated extracted repo), swapping to a normal remote dependency is a one-line change.

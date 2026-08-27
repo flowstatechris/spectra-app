@@ -6,6 +6,11 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		FA00000000000000000000C1 /* ThinkingOrbsKit in Frameworks */ = {isa = PBXBuildFile; productRef = FA00000000000000000000B1 /* ThinkingOrbsKit */; };
+		FA00000000000000000000C2 /* SpectraCore in Frameworks */ = {isa = PBXBuildFile; productRef = FA00000000000000000000B2 /* SpectraCore */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		F93921D3303FB95F00990001 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +57,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FA00000000000000000000C1 /* ThinkingOrbsKit in Frameworks */,
+				FA00000000000000000000C2 /* SpectraCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +119,8 @@
 			);
 			name = "spectra-app";
 			packageProductDependencies = (
+				FA00000000000000000000B1 /* ThinkingOrbsKit */,
+				FA00000000000000000000B2 /* SpectraCore */,
 			);
 			productName = "spectra-app";
 			productReference = F93921C3303FB95E00990001 /* spectra-app.app */;
@@ -195,6 +204,10 @@
 			);
 			mainGroup = F93921BA303FB95E00990001;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				FA00000000000000000000A1 /* XCLocalSwiftPackageReference "vendor/Libraries/packages/thinking-orbs/ports/ios/ThinkingOrbsKit" */,
+				FA00000000000000000000A2 /* XCLocalSwiftPackageReference "SpectraCore" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = F93921C4303FB95E00990001 /* Products */;
 			projectDirPath = "";
@@ -578,6 +591,28 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+/* Begin XCLocalSwiftPackageReference section */
+		FA00000000000000000000A1 /* XCLocalSwiftPackageReference "vendor/Libraries/packages/thinking-orbs/ports/ios/ThinkingOrbsKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "vendor/Libraries/packages/thinking-orbs/ports/ios/ThinkingOrbsKit";
+		};
+		FA00000000000000000000A2 /* XCLocalSwiftPackageReference "SpectraCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = SpectraCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		FA00000000000000000000B1 /* ThinkingOrbsKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ThinkingOrbsKit;
+		};
+		FA00000000000000000000B2 /* SpectraCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = SpectraCore;
+		};
+/* End XCSwiftPackageProductDependency section */
+
 	};
 	rootObject = F93921BB303FB95E00990001 /* Project object */;
 }

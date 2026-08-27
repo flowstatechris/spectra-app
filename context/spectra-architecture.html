@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Spectra Architecture</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f8f8f6;
+      --color-ink:     #111111;
+      --color-muted:   #6e6e6e;
+      --color-accent:  #262626;
+      --font-sans:     'Inter', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+
+    .frame { max-width: 1200px; width: 100%; }
+
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Architecture · Diagram Design</p>
+    <h1>Spectra — native Hermes client architecture</h1>
+
+    <svg viewBox="0 0 1200 700" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="spectra-arch-title spectra-arch-desc">
+      <title id="spectra-arch-title">Spectra native client architecture against a Hermes server process</title>
+      <desc id="spectra-arch-desc">Architecture diagram showing the Spectra iOS/macOS client authenticating via system-browser OAuth, then opening three distinct connections — chat over /api/pty, structured events over /api/events, and approval/clarify JSON-RPC over /api/ws — plus REST calls for profile discovery and file upload, against a single Hermes server process.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#6e6e6e"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#262626"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f8f8f6"/>
+
+      <!-- ============ ZONES (bg -> zones -> arrows -> nodes) ============ -->
+      <!-- Zone A: Spectra client -->
+      <rect x="40" y="144" width="320" height="284" rx="8" fill="rgba(17,17,17,0.02)" stroke="rgba(17,17,17,0.10)" stroke-width="0.8"/>
+      <rect x="60" y="148" width="220" height="12" rx="2" fill="#f8f8f6"/>
+      <text x="170" y="157" fill="rgba(17,17,17,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.10em">SPECTRA · iOS / macOS CLIENT</text>
+
+      <!-- Zone B: Hermes server -->
+      <rect x="840" y="144" width="320" height="428" rx="8" fill="rgba(17,17,17,0.02)" stroke="rgba(17,17,17,0.10)" stroke-width="0.8"/>
+      <rect x="860" y="148" width="280" height="12" rx="2" fill="#f8f8f6"/>
+      <text x="1000" y="157" fill="rgba(17,17,17,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.10em">HERMES SERVER · hermes_cli.main serve</text>
+
+      <!-- ============ ARROWS (behind nodes) ============ -->
+
+      <!-- A1: Client -> Identity Provider (OAuth PKCE) -->
+      <path d="M 200,176 V 140 Q 200,132 208,132 H 592 Q 600,132 600,124 V 104"
+            fill="none" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="366" y="112" width="68" height="12" rx="2" fill="#f8f8f6"/>
+      <text x="400" y="121" fill="#2e5aa8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">OAUTH PKCE</text>
+
+      <!-- A2: Client -> /api/status (straight, both y=200) -->
+      <line x1="330" y1="200" x2="870" y2="200" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="574" y="182" width="52" height="12" rx="2" fill="#f8f8f6"/>
+      <text x="600" y="191" fill="#2e5aa8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">STATUS</text>
+
+      <!-- A3: Client -> /api/pty (primary flow, accent) -->
+      <path d="M 330,224 H 552 Q 560,224 560,232 V 280 Q 560,288 568,288 H 870"
+            fill="none" stroke="#262626" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+      <rect x="530" y="206" width="52" height="12" rx="2" fill="#f8f8f6"/>
+      <text x="556" y="215" fill="#262626" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">CHAT WS</text>
+
+      <!-- A4: Client -> /api/events (subscribe) -->
+      <path d="M 330,248 H 612 Q 620,248 620,256 V 352 Q 620,360 628,360 H 870"
+            fill="none" stroke="#6e6e6e" stroke-width="1" marker-end="url(#arrow)"/>
+      <rect x="590" y="330" width="60" height="12" rx="2" fill="#f8f8f6"/>
+      <text x="620" y="339" fill="#6e6e6e" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">SUBSCRIBE</text>
+
+      <!-- A5: Client -> /api/ws (approval / clarify RPC) -->
+      <path d="M 330,272 H 672 Q 680,272 680,280 V 440 Q 680,448 688,448 H 870"
+            fill="none" stroke="#6e6e6e" stroke-width="1" marker-end="url(#arrow)"/>
+      <rect x="650" y="410" width="46" height="12" rx="2" fill="#f8f8f6"/>
+      <text x="673" y="419" fill="#6e6e6e" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">RPC WS</text>
+
+      <!-- A6: Client -> /api/chat/image-upload -->
+      <path d="M 330,296 H 732 Q 740,296 740,304 V 516 Q 740,524 748,524 H 870"
+            fill="none" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="710" y="486" width="52" height="12" rx="2" fill="#f8f8f6"/>
+      <text x="736" y="495" fill="#2e5aa8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">UPLOAD</text>
+
+      <!-- A7: /api/events -> ThinkingOrbsKit (drives orb state, dashed, straight y=384) -->
+      <line x1="870" y1="384" x2="330" y2="384" stroke="#6e6e6e" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+      <rect x="562" y="392" width="76" height="12" rx="2" fill="#f8f8f6"/>
+      <text x="600" y="401" fill="#6e6e6e" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">DRIVES ORB</text>
+
+      <!-- A8: Client -> Local Cache (read-through, straight, same x) -->
+      <line x1="130" y1="316" x2="130" y2="344" stroke="#6e6e6e" stroke-width="1" marker-end="url(#arrow)"/>
+      <rect x="140" y="322" width="44" height="12" rx="2" fill="#f8f8f6"/>
+      <text x="162" y="331" fill="#6e6e6e" font-size="7.5" font-family="'Geist Mono', monospace" text-anchor="start" letter-spacing="0.04em">CACHE</text>
+
+      <!-- ============ NODES ============ -->
+
+      <!-- Identity Provider (external) -->
+      <rect x="520" y="40" width="160" height="64" rx="6" fill="#f8f8f6"/>
+      <rect x="520" y="40" width="160" height="64" rx="6" fill="rgba(17,17,17,0.03)" stroke="rgba(17,17,17,0.30)" stroke-width="1"/>
+      <rect x="528" y="48" width="28" height="12" rx="2" fill="transparent" stroke="rgba(17,17,17,0.22)" stroke-width="0.8"/>
+      <text x="542" y="57" fill="#8f8f8f" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">EXT</text>
+      <text x="600" y="76" fill="#111111" font-size="12" font-weight="600" font-family="'Inter', sans-serif" text-anchor="middle">Identity Provider</text>
+      <text x="600" y="92" fill="#6e6e6e" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">System browser · RFC 8252</text>
+
+      <!-- Spectra Client (focal) -->
+      <rect x="70" y="176" width="260" height="140" rx="6" fill="#f8f8f6"/>
+      <rect x="70" y="176" width="260" height="140" rx="6" fill="rgba(38,38,38,0.06)" stroke="#262626" stroke-width="1"/>
+      <rect x="78" y="184" width="28" height="12" rx="2" fill="transparent" stroke="rgba(38,38,38,0.50)" stroke-width="0.8"/>
+      <text x="92" y="193" fill="#262626" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">APP</text>
+      <text x="200" y="216" fill="#111111" font-size="13" font-weight="600" font-family="'Inter', sans-serif" text-anchor="middle">Spectra Client</text>
+      <text x="200" y="232" fill="#6e6e6e" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">SwiftUI · iOS 26 / macOS 14+</text>
+      <text x="200" y="248" fill="#8f8f8f" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">AppState → ProfileSession</text>
+      <line x1="90" y1="260" x2="310" y2="260" stroke="rgba(17,17,17,0.10)" stroke-width="0.8"/>
+      <text x="200" y="278" fill="#6e6e6e" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">3 sockets/profile · 1 slot on cap</text>
+      <text x="200" y="298" fill="#6e6e6e" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">CryptoKit · Network · ASWebAuth</text>
+
+      <!-- Local Cache (store) -->
+      <rect x="70" y="344" width="124" height="64" rx="6" fill="#f8f8f6"/>
+      <rect x="70" y="344" width="124" height="64" rx="6" fill="rgba(17,17,17,0.05)" stroke="#6e6e6e" stroke-width="1"/>
+      <rect x="78" y="352" width="34" height="12" rx="2" fill="transparent" stroke="rgba(110,110,110,0.50)" stroke-width="0.8"/>
+      <text x="95" y="361" fill="#6e6e6e" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">STORE</text>
+      <text x="132" y="382" fill="#111111" font-size="11" font-weight="600" font-family="'Inter', sans-serif" text-anchor="middle">Local Cache</text>
+      <text x="132" y="397" fill="#6e6e6e" font-size="8.5" font-family="'Geist Mono', monospace" text-anchor="middle">SwiftData</text>
+
+      <!-- ThinkingOrbsKit (optional/local) -->
+      <rect x="206" y="344" width="124" height="64" rx="6" fill="#f8f8f6"/>
+      <rect x="206" y="344" width="124" height="64" rx="6" fill="rgba(17,17,17,0.02)" stroke="rgba(17,17,17,0.20)" stroke-width="1" stroke-dasharray="4,3"/>
+      <rect x="214" y="352" width="30" height="12" rx="2" fill="transparent" stroke="rgba(17,17,17,0.30)" stroke-width="0.8"/>
+      <text x="229" y="361" fill="#8f8f8f" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">PKG</text>
+      <text x="268" y="382" fill="#111111" font-size="11" font-weight="600" font-family="'Inter', sans-serif" text-anchor="middle">ThinkingOrbsKit</text>
+      <text x="268" y="397" fill="#6e6e6e" font-size="8.5" font-family="'Geist Mono', monospace" text-anchor="middle">SPM · orb state</text>
+
+      <!-- /api/status -->
+      <rect x="870" y="176" width="260" height="56" rx="6" fill="#f8f8f6"/>
+      <rect x="870" y="176" width="260" height="56" rx="6" fill="#ffffff" stroke="#111111" stroke-width="1"/>
+      <rect x="878" y="184" width="26" height="12" rx="2" fill="transparent" stroke="rgba(17,17,17,0.40)" stroke-width="0.8"/>
+      <text x="891" y="193" fill="#111111" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">API</text>
+      <text x="1000" y="207" fill="#111111" font-size="12" font-weight="600" font-family="'Inter', sans-serif" text-anchor="middle">/api/status</text>
+      <text x="1000" y="222" fill="#6e6e6e" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Public · profile discovery</text>
+
+      <!-- /api/pty (focal) -->
+      <rect x="870" y="252" width="260" height="72" rx="6" fill="#f8f8f6"/>
+      <rect x="870" y="252" width="260" height="72" rx="6" fill="rgba(38,38,38,0.06)" stroke="#262626" stroke-width="1"/>
+      <rect x="878" y="260" width="26" height="12" rx="2" fill="transparent" stroke="rgba(38,38,38,0.50)" stroke-width="0.8"/>
+      <text x="891" y="269" fill="#262626" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">API</text>
+      <text x="1000" y="288" fill="#111111" font-size="12" font-weight="600" font-family="'Inter', sans-serif" text-anchor="middle">/api/pty</text>
+      <text x="1000" y="303" fill="#6e6e6e" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">WS · attach=channel · ttl 1800s</text>
+      <text x="1000" y="316" fill="#8f8f8f" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">Cap: 16 concurrent, server-wide</text>
+
+      <!-- /api/events -->
+      <rect x="870" y="344" width="260" height="56" rx="6" fill="#f8f8f6"/>
+      <rect x="870" y="344" width="260" height="56" rx="6" fill="#ffffff" stroke="#111111" stroke-width="1"/>
+      <rect x="878" y="352" width="26" height="12" rx="2" fill="transparent" stroke="rgba(17,17,17,0.40)" stroke-width="0.8"/>
+      <text x="891" y="361" fill="#111111" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">API</text>
+      <text x="1000" y="375" fill="#111111" font-size="12" font-weight="600" font-family="'Inter', sans-serif" text-anchor="middle">/api/events</text>
+      <text x="1000" y="390" fill="#6e6e6e" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">WS · structured JSON stream</text>
+
+      <!-- /api/ws -->
+      <rect x="870" y="420" width="260" height="56" rx="6" fill="#f8f8f6"/>
+      <rect x="870" y="420" width="260" height="56" rx="6" fill="#ffffff" stroke="#111111" stroke-width="1"/>
+      <rect x="878" y="428" width="26" height="12" rx="2" fill="transparent" stroke="rgba(17,17,17,0.40)" stroke-width="0.8"/>
+      <text x="891" y="437" fill="#111111" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">API</text>
+      <text x="1000" y="451" fill="#111111" font-size="12" font-weight="600" font-family="'Inter', sans-serif" text-anchor="middle">/api/ws</text>
+      <text x="1000" y="466" fill="#6e6e6e" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">JSON-RPC · approval / clarify</text>
+
+      <!-- /api/chat/image-upload -->
+      <rect x="870" y="496" width="260" height="56" rx="6" fill="#f8f8f6"/>
+      <rect x="870" y="496" width="260" height="56" rx="6" fill="#ffffff" stroke="#111111" stroke-width="1"/>
+      <rect x="878" y="504" width="26" height="12" rx="2" fill="transparent" stroke="rgba(17,17,17,0.40)" stroke-width="0.8"/>
+      <text x="891" y="513" fill="#111111" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">API</text>
+      <text x="1000" y="527" fill="#111111" font-size="12" font-weight="600" font-family="'Inter', sans-serif" text-anchor="middle">/api/chat/image-upload</text>
+      <text x="1000" y="542" fill="#6e6e6e" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">REST POST · then /image on pty</text>
+
+      <!-- ============ LEGEND ============ -->
+      <line x1="40" y1="608" x2="1160" y2="608" stroke="rgba(17,17,17,0.10)" stroke-width="0.8"/>
+      <text x="40" y="624" fill="#6e6e6e" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND</text>
+
+      <rect x="40" y="640" width="14" height="10" rx="2" fill="rgba(38,38,38,0.06)" stroke="#262626" stroke-width="1"/>
+      <text x="60" y="648" fill="#6e6e6e" font-size="8.5" font-family="'Inter', sans-serif">Focal / primary flow</text>
+
+      <rect x="222" y="640" width="14" height="10" rx="2" fill="#ffffff" stroke="#111111" stroke-width="1"/>
+      <text x="242" y="648" fill="#6e6e6e" font-size="8.5" font-family="'Inter', sans-serif">Server endpoint</text>
+
+      <rect x="392" y="640" width="14" height="10" rx="2" fill="rgba(17,17,17,0.05)" stroke="#6e6e6e" stroke-width="1"/>
+      <text x="412" y="648" fill="#6e6e6e" font-size="8.5" font-family="'Inter', sans-serif">Store</text>
+
+      <rect x="470" y="640" width="14" height="10" rx="2" fill="rgba(17,17,17,0.02)" stroke="rgba(17,17,17,0.20)" stroke-width="1" stroke-dasharray="4,3"/>
+      <text x="490" y="648" fill="#6e6e6e" font-size="8.5" font-family="'Inter', sans-serif">Optional package</text>
+
+      <rect x="616" y="640" width="14" height="10" rx="2" fill="rgba(17,17,17,0.03)" stroke="rgba(17,17,17,0.30)" stroke-width="1"/>
+      <text x="636" y="648" fill="#6e6e6e" font-size="8.5" font-family="'Inter', sans-serif">External</text>
+
+      <line x1="740" y1="645" x2="768" y2="645" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <text x="776" y="648" fill="#6e6e6e" font-size="8.5" font-family="'Inter', sans-serif">HTTP / REST</text>
+
+      <line x1="900" y1="645" x2="928" y2="645" stroke="#262626" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+      <text x="936" y="648" fill="#6e6e6e" font-size="8.5" font-family="'Inter', sans-serif">Primary chat socket</text>
+
+      <line x1="1080" y1="645" x2="1108" y2="645" stroke="#6e6e6e" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+      <text x="1116" y="648" fill="#6e6e6e" font-size="8.5" font-family="'Inter', sans-serif">Async / push</text>
+    </svg>
+  </div>
+</body>
+</html>
