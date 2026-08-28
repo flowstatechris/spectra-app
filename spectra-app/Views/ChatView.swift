@@ -27,7 +27,7 @@ struct ChatView: View {
         VStack(spacing: 0) {
             header
                 .contentShape(Rectangle())
-                .onTapGesture { if app.activeSession != nil { showingSessions = true } }
+                .onTapGesture { if compactHeader, app.activeSession != nil { showingSessions = true } }
                 .accessibilityAddTraits(.isButton)
                 .accessibilityHint("Switch or start a chat")
             Hairline()
@@ -110,22 +110,52 @@ struct ChatView: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("\(app.activeProfileName ?? "Profile"), \(statusLabel)")
             } else {
-                VStack(spacing: 6) {
-                    // Half-size orb: px64 is the only calibrated preset besides
-                    // px20, so scale it 0.5 and collapse the reserved box to 32.
-                    OrbView(status: app.activeSession?.status ?? .idle,
-                            connectionState: app.connectionState,
-                            size: .px64, showsLabel: false)
-                        .scaleEffect(0.5)
-                        .frame(width: 32, height: 32)
-                    Text("\(app.activeProfileName ?? "") · \(statusLabel)")
-                        .font(Theme.mono(12, .medium))
-                        .foregroundStyle(Theme.muted)
+                HStack {
+                    // All Chats (left of the orb) — opens the switcher.
+                    headerCircle("bubble.left.and.bubble.right", "All chats",
+                                 enabled: app.activeSession != nil) { showingSessions = true }
+                        .opacity(app.activeSession != nil ? 1 : 0)
+                    Spacer()
+                    VStack(spacing: 6) {
+                        // Half-size orb: px64 is the only calibrated preset besides
+                        // px20, so scale it 0.5 and collapse the reserved box to 32.
+                        OrbView(status: app.activeSession?.status ?? .idle,
+                                connectionState: app.connectionState,
+                                size: .px64, showsLabel: false)
+                            .scaleEffect(0.5)
+                            .frame(width: 32, height: 32)
+                        Text("\(app.activeProfileName ?? "") · \(statusLabel)")
+                            .font(Theme.mono(12, .medium))
+                            .foregroundStyle(Theme.muted)
+                    }
+                    Spacer()
+                    // New Chat (right of the orb) — fresh session.
+                    headerCircle("square.and.pencil", "New chat",
+                                 enabled: app.activeSession?.canSwitchSessions ?? false) {
+                        Task { await app.activeSession?.newSession() }
+                    }
+                    .opacity(app.activeSession != nil ? 1 : 0)
                 }
-                .padding(.vertical, 10)
+                .padding(.horizontal, 24).padding(.vertical, 10)
             }
         }
         .frame(maxWidth: .infinity)
+    }
+
+    // Icon-only circle for an expanded-header control (the hidden header tap
+    // stays for the collapsed state).
+    private func headerCircle(_ icon: String, _ label: String,
+                              enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(enabled ? Theme.ink : Theme.muted)
+                .frame(width: 36, height: 36)
+                .background(Theme.plate, in: Circle())
+                .overlay(Circle().strokeBorder(Theme.hairline, lineWidth: 1))
+        }
+        .disabled(!enabled)
+        .accessibilityLabel(label)
     }
 
     private var compactHeader: Bool {
@@ -1128,3 +1158,4 @@ private final class FollowThrottle {
         return true
     }
 }
+
