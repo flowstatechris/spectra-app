@@ -41,6 +41,8 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Theme.plate, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
+            Button("Change server") { app.editBackend() }
+                .buttonStyle(OutlineButton())
             Button("Sign out") { Task { await app.logout() } }
                 .buttonStyle(OutlineButton(tint: Theme.danger))
         }

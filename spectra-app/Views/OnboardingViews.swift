@@ -65,7 +65,10 @@ struct BackendConfigView: View {
             Spacer(); Spacer()
         }
         .paper()
-        .onAppear { focused = true }
+        .onAppear {
+            if urlText.isEmpty { urlText = app.backend?.baseURL.absoluteString ?? "" }
+            focused = true
+        }
     }
 }
 
@@ -91,6 +94,8 @@ struct LoginView: View {
                             .buttonStyle(PrimaryButton())
                             .padding(.horizontal, 40)
                             .padding(.top, 4)
+                        Button("Change server") { app.editBackend() }
+                            .buttonStyle(OutlineButton())
                     }
                     .padding(.top, 28)
                 }

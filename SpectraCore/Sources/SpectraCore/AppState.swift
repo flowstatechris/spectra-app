@@ -62,10 +62,23 @@ public final class AppState {
 
     public func setBackend(_ url: URL) {
         let config = BackendConfig(baseURL: url)
+        // A new backend means a new auth client. Any hydrated/previous `rpc` is
+        // bound to the OLD auth client (stale/nil tokens), so connectRPC must
+        // NOT reuse it — else mintTicket runs on the old client → notLoggedIn.
+        if let old = rpc { Task { await old.disconnect() } }
+        rpc = nil
+        eventRouter?.cancel(); eventRouter = nil
+        stateWatcher?.cancel(); stateWatcher = nil
         backend = config
         auth = HermesAuthClient(backend: config)
         phase = .needsLogin
     }
+
+    /// Re-open the backend URL box (e.g. moved networks → new LAN IP). Pointing
+    /// at a new address drops the auth client, so `setBackend` forces re-login.
+    /// ponytail: re-auth on server change; token migration across baseURLs isn't
+    /// worth the complexity for a LAN move.
+    public func editBackend() { phase = .needsBackend }
 
     /// Instant cold-launch (spec §10): paint cached backend + profiles +
     /// message history synchronously, then reconnect in the background. If the

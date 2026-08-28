@@ -278,25 +278,15 @@ struct ChatView: View {
                 pendingStrip(session)
             }
             HStack(spacing: 12) {
-                Menu {
-                    Button { showingPhotoLibrary = true } label: {
-                        Label("Photo Library", systemImage: "photo.on.rectangle")
-                    }
-                    Button { showingCamera = true } label: {
-                        Label("Camera", systemImage: "camera")
-                    }
-                    .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
-                    Button { showingFileImporter = true } label: {
-                        Label("File", systemImage: "doc")
-                    }
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(Theme.muted)
-                        .frame(width: 40, height: 40)
-                }
-                .accessibilityLabel("Add attachment")
-                .disabled(!session.canSend)
+                // ponytail: UIKit-backed menu, not SwiftUI Menu — SwiftUI Menu
+                // inside a UIHostingController logs the _UIReparentingView warning.
+                // Native UIButton menu = same anchored popover, no warning.
+                AttachMenuButton(enabled: session.canSend,
+                                 photoLibrary: { showingPhotoLibrary = true },
+                                 camera: { showingCamera = true },
+                                 file: { showingFileImporter = true })
+                    .frame(width: 40, height: 40)
+                    .accessibilityLabel("Add attachment")
 
                 TextField("", text: $draft, prompt:
                     Text(session.canSend
@@ -1097,6 +1087,41 @@ private struct ShareSheet: UIViewControllerRepresentable {
         UIActivityViewController(activityItems: [url], applicationActivities: nil)
     }
     func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
+}
+
+/// UIKit-backed attachment menu: same anchored popover as SwiftUI `Menu`,
+/// without the `_UIReparentingView` warning SwiftUI logs for a Menu hosted in a
+/// UIHostingController.
+private struct AttachMenuButton: UIViewRepresentable {
+    let enabled: Bool
+    let photoLibrary: () -> Void
+    let camera: () -> Void
+    let file: () -> Void
+
+    func makeUIView(context: Context) -> UIButton {
+        let b = UIButton(type: .system)
+        b.setImage(UIImage(systemName: "plus", withConfiguration:
+            UIImage.SymbolConfiguration(pointSize: 17, weight: .medium)), for: .normal)
+        b.tintColor = UIColor(Theme.muted)
+        b.showsMenuAsPrimaryAction = true
+        b.setContentHuggingPriority(.required, for: .horizontal)
+        return b
+    }
+
+    func updateUIView(_ b: UIButton, context: Context) {
+        b.isEnabled = enabled
+        var items: [UIAction] = [
+            UIAction(title: "Photo Library",
+                     image: UIImage(systemName: "photo.on.rectangle")) { _ in photoLibrary() }
+        ]
+        if UIImagePickerController.isSourceTypeAvailable(.camera) {
+            items.append(UIAction(title: "Camera",
+                                  image: UIImage(systemName: "camera")) { _ in camera() })
+        }
+        items.append(UIAction(title: "File",
+                              image: UIImage(systemName: "doc")) { _ in file() })
+        b.menu = UIMenu(children: items)
+    }
 }
 
 /// Native camera bridge; SwiftUI still has no camera equivalent to PhotosPicker.
