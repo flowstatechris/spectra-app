@@ -15,6 +15,7 @@ struct ChatView: View {
     @State private var showingFileImporter = false
     @State private var stopping = false
     @State private var scrolledIntoConversation = false
+    @State private var isPinnedToBottom = true   // auto-follow only while at bottom
     @State private var showingInitialHeader = true
     @State private var showingStatusTransition = false
     @State private var collapsedApprovalID: String?
@@ -162,15 +163,25 @@ struct ChatView: View {
             } action: { _, scrolled in
                 scrolledIntoConversation = scrolled
             }
+            // Pinned = the visible bottom is within 40pt of the content bottom.
+            // Auto-follow only holds while pinned, so scrolling up to re-read
+            // mid-stream isn't yanked back down (re-pins when you return).
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.visibleRect.maxY >= geometry.contentSize.height - 40
+            } action: { _, atBottom in
+                isPinnedToBottom = atBottom
+            }
             // Follow the conversation to the bottom. Key on O(1) values (row
             // count for new messages, last text length for streaming growth) —
             // NOT `messages.last`, whose Equatable compare walks the whole
             // growing message string every token = a hidden O(n²) on the main
             // thread during a long reply.
             .onChange(of: session.messages.count) {
+                guard isPinnedToBottom else { return }
                 if let id = session.messages.last?.id { proxy.scrollTo(id, anchor: .bottom) }
             }
             .onChange(of: session.messages.last?.text.count) {
+                guard isPinnedToBottom else { return }
                 if let id = session.messages.last?.id { proxy.scrollTo(id, anchor: .bottom) }
             }
             .onAppear { scrollToActivity(in: session, proxy: proxy) }
