@@ -22,7 +22,7 @@ struct SettingsView: View {
                     appearanceSection
                     aboutSection
                 }
-                .padding(24)
+                .padding(Space.gutter)
             }
             .paper()
             .navigationTitle("Settings")
@@ -39,7 +39,7 @@ struct SettingsView: View {
                     .foregroundStyle(Theme.ink)
                     .padding(14)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Theme.plate, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .background(Theme.plate, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
             }
             Button("Change server") { app.editBackend() }
                 .buttonStyle(OutlineButton())

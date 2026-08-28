@@ -10,9 +10,9 @@ struct ProfilesView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: Space.row) {
                     Eyebrow("Connected")
-                        .padding(.horizontal, 24).padding(.top, 8)
+                        .padding(.horizontal, Space.gutter).padding(.top, 8)
                     ForEach(app.sessions.keys.sorted(), id: \.self) { name in
                         if let session = app.sessions[name] {
                             NavigationLink { ProfileDetailView(session: session) } label: {
@@ -21,7 +21,7 @@ struct ProfilesView: View {
                             .buttonStyle(.plain)
                         }
                     }
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, Space.gutter)
                 }
                 .padding(.bottom, 20)
             }
@@ -114,7 +114,7 @@ struct ProfileDetailView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(24)
+            .padding(Space.gutter)
         }
         .paper()
         .navigationTitle(session.profile.name)

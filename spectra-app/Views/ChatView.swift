@@ -106,7 +106,7 @@ struct ChatView: View {
                         .foregroundStyle(Theme.muted)
                     Spacer()
                 }
-                .padding(.horizontal, 18).padding(.vertical, 10)
+                .padding(.horizontal, Space.gutter).padding(.vertical, 10)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("\(app.activeProfileName ?? "Profile"), \(statusLabel)")
             } else {
@@ -136,7 +136,7 @@ struct ChatView: View {
                     }
                     .opacity(app.activeSession != nil ? 1 : 0)
                 }
-                .padding(.horizontal, 24).padding(.vertical, 10)
+                .padding(.horizontal, Space.gutter).padding(.vertical, 10)
             }
         }
         .frame(maxWidth: .infinity)
@@ -172,20 +172,37 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    ForEach(session.messages) { message in
-                        MessageRow(message: message, session: session,
-                                   collapsedApprovalID: $collapsedApprovalID)
-                            .id(message.id)
-                            .background(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(Theme.accent.opacity(
-                                        highlightedMessageID == message.id ? 0.14 : 0))
-                                    .padding(.horizontal, -8)
-                            )
-                            .animation(.easeInOut(duration: 0.3), value: highlightedMessageID)
+                    ForEach(threadItems(session.messages)) { item in
+                        switch item {
+                        case .message(let message):
+                            MessageRow(message: message, session: session,
+                                       collapsedApprovalID: $collapsedApprovalID)
+                                .id(message.id)
+                                .background(
+                                    RoundedRectangle(cornerRadius: Radius.sm)
+                                        .fill(Theme.accent.opacity(
+                                            highlightedMessageID == message.id ? 0.14 : 0))
+                                        .padding(.horizontal, -8)
+                                )
+                                .animation(.easeInOut(duration: 0.3), value: highlightedMessageID)
+                                .transition(.asymmetric(
+                                    insertion: .opacity.combined(with: .move(edge: .bottom)),
+                                    removal: .opacity))
+                        case .statusRun(let id, let lines, let live):
+                            StatusRunRow(lines: lines, live: live)
+                                .id(id)
+                                .transition(.opacity)
+                        }
+                    }
+                    if awaitingFirstOutput(session) {
+                        thinkingPlaceholder
+                            .id(Self.placeholderID)
+                            .transition(.opacity)
                     }
                 }
-                .padding(.horizontal, 18).padding(.vertical, 20)
+                .animation(.snappy, value: session.messages.count)
+                .animation(.snappy, value: awaitingFirstOutput(session))
+                .padding(.horizontal, Space.gutter).padding(.vertical, 20)
             }
             .defaultScrollAnchor(.bottom)
             .scrollDismissesKeyboard(.immediately)
@@ -218,12 +235,55 @@ struct ChatView: View {
                 guard isPinnedToBottom, followThrottle.ready(minInterval: 0.08) else { return }
                 if let id = session.messages.last?.id { proxy.scrollTo(id, anchor: .bottom) }
             }
+            // The placeholder appears below the last message, so following the
+            // message alone can leave it under the fold.
+            .onChange(of: awaitingFirstOutput(session)) { _, waiting in
+                guard waiting, isPinnedToBottom else { return }
+                proxy.scrollTo(Self.placeholderID, anchor: .bottom)
+            }
+            // The shimmer row is a fixed-height line, so the thread only grows
+            // when the rendered answer replaces it. ponytail: that render is an
+            // off-main parse with no completion signal to hook, so follow on the
+            // next runloop turns rather than plumbing readiness back out of
+            // MarkdownText for this one scroll.
+            .onChange(of: session.streamingMessageID) { _, id in
+                guard id == nil, isPinnedToBottom,
+                      let last = session.messages.last?.id else { return }
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(120))
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        proxy.scrollTo(last, anchor: .bottom)
+                    }
+                }
+            }
             .onAppear { scrollToActivity(in: session, proxy: proxy) }
             .onChange(of: app.chatScrollTargetID) {
                 scrollToActivity(in: session, proxy: proxy)
             }
         }
     }
+
+    private static let placeholderID = "thinking-placeholder"
+
+    /// A turn is running but the agent hasn't produced anything yet — the dead
+    /// gap between hitting send and the first token or status line. Every agent
+    /// row (status, tool, approval, error) is `.agent`, so a trailing `.user`
+    /// message means nothing has come back.
+    private func awaitingFirstOutput(_ session: ProfileSession) -> Bool {
+        session.isRunning && session.messages.last?.role == .user
+    }
+
+    private var thinkingPlaceholder: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Rectangle().fill(Theme.accent.opacity(0.5)).frame(width: 2)
+            Text("\(statusLabel)…")
+                .font(Theme.mono(14))
+                .shimmering()
+            Spacer(minLength: 24)
+        }
+        .accessibilityLabel(statusLabel)
+    }
+
 
     private func scrollToActivity(in session: ProfileSession, proxy: ScrollViewProxy) {
         guard let target = app.chatScrollTargetID,
@@ -254,6 +314,7 @@ struct ChatView: View {
         }
         .buttonStyle(.plain)
         .accessibilityHint("Restores the permission request")
+        .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 
     private var emptyState: some View {
@@ -300,7 +361,7 @@ struct ChatView: View {
                     .disabled(!session.canSend)
                     .padding(.vertical, 10).padding(.horizontal, 16)
                     .background(Theme.plate,
-                                in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                                in: RoundedRectangle(cornerRadius: Radius.xl, style: .continuous))
 
                 if session.isRunning {
                     Button {
@@ -322,6 +383,7 @@ struct ChatView: View {
                     .accessibilityLabel("Stop Hermes")
                     .accessibilityIdentifier("stopButton")
                     .disabled(stopping)
+                    .transition(.scale.combined(with: .opacity))
                 } else {
                     Button {
                         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -339,9 +401,12 @@ struct ChatView: View {
                     .accessibilityLabel("Send message")
                     .accessibilityIdentifier("sendButton")
                     .disabled(!canSend(session))
+                    .transition(.scale.combined(with: .opacity))
+                    .animation(.easeInOut(duration: 0.2), value: canSend(session))
                 }
             }
-            .padding(.horizontal, 16).padding(.vertical, 12)
+            .padding(.horizontal, Space.gutter).padding(.vertical, 12)
+            .animation(.snappy, value: session.isRunning)
         }
         .onChange(of: pickerItems) { _, items in
             guard !items.isEmpty else { return }
@@ -382,12 +447,12 @@ struct ChatView: View {
                         if a.kind == .image, let img = UIImage(data: a.thumbnailJPEG) {
                             Image(uiImage: img).resizable().scaledToFill()
                                 .frame(width: 40, height: 40)
-                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .clipShape(RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
                         } else {
                             Image(systemName: "doc.fill")
                                 .font(.title3).foregroundStyle(Theme.accent)
                                 .frame(width: 40, height: 40)
-                                .background(Theme.plate, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .background(Theme.plate, in: RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
                         }
                         Text(a.name).font(Theme.mono(11)).foregroundStyle(Theme.ink)
                             .lineLimit(1).frame(maxWidth: 120)
@@ -442,7 +507,7 @@ private struct UserAttachmentBubble: View {
         if attachment.kind == .image, let img = UIImage(data: attachment.thumbnailJPEG) {
             Image(uiImage: img).resizable().scaledToFill()
                 .frame(maxWidth: 200, maxHeight: 200)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
                 .onTapGesture { showFull = true }
                 .accessibilityLabel("Attached image \(attachment.name). Tap to view full screen.")
                 .fullScreenCover(isPresented: $showFull) {
@@ -460,8 +525,155 @@ private struct UserAttachmentBubble: View {
                 }
             }
             .padding(12)
-            .background(Theme.plate, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(Theme.plate, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
         }
+    }
+}
+
+enum ThreadItem: Identifiable {
+    case message(SpectraCore.Message)
+    case statusRun(id: String, lines: [SpectraCore.Message], live: Bool)
+
+    var id: String {
+        switch self {
+        case .message(let m): return m.id
+        case .statusRun(let id, _, _): return "run:\(id)"
+        }
+    }
+}
+
+/// Pin each turn's final agent message to the end of that turn.
+///
+/// Hermes creates the agent's message at its *first* token, then the tools that
+/// actually produce the answer keep appending after it — and `message.complete`
+/// writes the finished text back into that early slot. Chronologically honest,
+/// but it buries the answer above a forest of tool rows you then have to scroll
+/// up through. The Hermes TUI keeps the response at the bottom; so do we.
+///
+/// Only the *last* agent `.plain` message of each turn moves, so narration that
+/// introduces a tool ("Loading the skill first:") stays above it.
+func pinAnswersToTurnEnd(_ messages: [SpectraCore.Message]) -> [SpectraCore.Message] {
+    var out: [SpectraCore.Message] = []
+    var turn: [SpectraCore.Message] = []
+
+    func flushTurn() {
+        if let i = turn.lastIndex(where: { $0.role == .agent && $0.kind == .plain }),
+           i != turn.count - 1 {
+            turn.append(turn.remove(at: i))
+        }
+        out.append(contentsOf: turn)
+        turn = []
+    }
+
+    for message in messages {
+        if message.role == .user {
+            flushTurn()          // a new prompt closes the previous turn
+            out.append(message)
+        } else {
+            turn.append(message)
+        }
+    }
+    flushTurn()
+    return out
+}
+
+/// Thread rows, with consecutive `.status` lines folded into one run. The
+/// trailing run is "live" (its last line shimmers); any run something newer has
+/// superseded collapses to a single expandable summary, so a long tool-heavy
+/// turn doesn't bury the answer under its own narration.
+///
+/// ponytail: recomputed on every body pass, so it re-walks the message array
+/// once per streamed token — O(messages), not O(text), and SwiftUI already
+/// diffs the same array. If a very long thread ever shows up in a trace, cache
+/// it keyed on `messages.count` rather than making it incremental.
+func threadItems(_ messages: [SpectraCore.Message]) -> [ThreadItem] {
+    var items: [ThreadItem] = []
+    var run: [SpectraCore.Message] = []
+    func flush(live: Bool) {
+        guard let first = run.first else { return }
+        items.append(.statusRun(id: first.id, lines: run, live: live))
+        run = []
+    }
+    for message in pinAnswersToTurnEnd(messages) {
+        if case .status = message.kind {
+            run.append(message)
+        } else {
+            flush(live: false)
+            items.append(.message(message))
+        }
+    }
+    flush(live: true)   // trailing run has nothing after it → live
+    return items
+}
+
+/// One quiet lifecycle line ("Loading your September calendar now.").
+private struct StatusLine: View {
+    let text: String
+    var shimmer = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Rectangle().fill(Theme.hairline).frame(width: 2)
+            Text(text)
+                .font(Theme.mono(11))
+                .shimmering(shimmer)   // owns the colour; muted when inactive
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// A run of consecutive status lines. Live (nothing has followed it yet): every
+/// line, newest shimmering. Superseded: collapses to the last line plus a
+/// count, expandable — same chevron affordance as ToolActivityRow — so a
+/// tool-heavy turn doesn't bury its own answer under narration.
+private struct StatusRunRow: View {
+    let lines: [SpectraCore.Message]
+    let live: Bool
+    @State private var expanded = false
+
+    var body: some View {
+        // ponytail: a single superseded line isn't worth a disclosure control.
+        if live || lines.count == 1 {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(lines) { line in
+                    StatusLine(text: line.text,
+                               shimmer: live && line.id == lines.last?.id)
+                }
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                summary
+                if expanded {
+                    ForEach(lines) { StatusLine(text: $0.text) }
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+        }
+    }
+
+    private var summary: some View {
+        Button { withAnimation(.snappy) { expanded.toggle() } } label: {
+            HStack(alignment: .top, spacing: 8) {
+                Rectangle().fill(Theme.hairline).frame(width: 2)
+                Text(expanded ? "\(lines.count) steps" : (lines.last?.text ?? ""))
+                    .font(Theme.mono(11))
+                    .foregroundStyle(Theme.muted)
+                    .lineLimit(1)
+                if !expanded {
+                    Text("+\(lines.count - 1)")
+                        .font(Theme.mono(10, .semibold))
+                        .foregroundStyle(Theme.muted.opacity(0.8))
+                }
+                Spacer(minLength: 8)
+                Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Theme.muted.opacity(0.65))
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(expanded ? "\(lines.count) steps" : (lines.last?.text ?? ""))
+        .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+        .accessibilityHint("Double tap to \(expanded ? "collapse" : "show all steps")")
     }
 }
 
@@ -469,6 +681,13 @@ struct MessageRow: View {
     let message: SpectraCore.Message
     let session: ProfileSession
     @Binding var collapsedApprovalID: String?
+    @Environment(AppState.self) private var app
+
+    /// Only the streaming row reads this, so only that row ends up observing
+    /// `connectionState` — the rest never touch it.
+    private var statusLabel: String {
+        OrbView.label(for: session.status, connectionState: app.connectionState)
+    }
 
     var body: some View {
         switch message.kind {
@@ -476,13 +695,9 @@ struct MessageRow: View {
             ToolActivityRow(activity: activity)
 
         case .status:
-            HStack(spacing: 8) {
-                Rectangle().fill(Theme.hairline).frame(width: 2)
-                Text(message.text)
-                    .font(Theme.mono(11))
-                    .foregroundStyle(Theme.muted)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // Grouped into StatusRunRow by `threadItems`; this is the fallback
+            // for a status message rendered outside a run.
+            StatusLine(text: message.text)
 
         case .approval(let event):
             approvalRow(event)
@@ -507,8 +722,8 @@ struct MessageRow: View {
                 Spacer()
             }
             .padding(12)
-            .background(Theme.ok.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .background(Theme.ok.opacity(0.08), in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
                 .strokeBorder(Theme.ok.opacity(0.3), lineWidth: 1))
 
         case .plain:
@@ -522,7 +737,7 @@ struct MessageRow: View {
                             .font(Theme.mono(14))
                             .foregroundStyle(Theme.paper)
                             .padding(.vertical, 10).padding(.horizontal, 14)
-                            .background(Theme.ink, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .background(Theme.ink, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
@@ -531,21 +746,28 @@ struct MessageRow: View {
                 HStack(alignment: .top, spacing: 12) {
                     Rectangle().fill(Theme.accent.opacity(0.5)).frame(width: 2)
                     VStack(alignment: .leading, spacing: 10) {
-                        if !message.text.isEmpty {
-                            if message.id == session.streamingMessageID {
-                                // Live stream: plain text, no per-token markdown reparse.
-                                Text(message.text)
-                                    .font(Theme.mono(14))
-                                    .foregroundStyle(Theme.ink)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            } else {
-                                MarkdownText(text: message.text)   // §9: rendered markdown
-                            }
+                        if message.id == session.streamingMessageID {
+                            // The raw stream is half-written markdown — asterisks
+                            // and pipes that resolve into something else a second
+                            // later. Hold it back and shimmer the status instead,
+                            // then cross-fade to the rendered answer. Also means
+                            // no per-token redraw of a growing block of text.
+                            Text("\(statusLabel)…")
+                                .font(Theme.mono(14))
+                                .shimmering()
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .transition(.opacity)
+                        } else if !message.text.isEmpty {
+                            MarkdownText(text: message.text)   // §9: rendered markdown
+                                .transition(.opacity)
                         }
                         ForEach(message.media) { m in     // §9 receive-side
                             AgentMediaView(media: m)
                         }
                     }
+                    // Cross-fade covers the beat where MarkdownText has mounted
+                    // but its off-main parse hasn't landed yet.
+                    .animation(.easeInOut(duration: 0.3), value: session.streamingMessageID)
                     Spacer(minLength: 24)
                 }
             }
@@ -649,8 +871,8 @@ private struct EventReceipt: View {
             }
         }
         .padding(12)
-        .background(tint.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+        .background(tint.opacity(0.07), in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
             .strokeBorder(tint.opacity(0.25), lineWidth: 1))
     }
 }
@@ -688,7 +910,9 @@ struct ToolActivityRow: View {
             .accessibilityValue(expanded ? "Expanded" : "Collapsed")
             .accessibilityHint("Double tap to \(expanded ? "collapse" : "show details")")
 
-            if expanded { details }
+            if expanded {
+                details.transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 7)
@@ -734,7 +958,7 @@ struct ToolActivityRow: View {
         }
         .frame(maxHeight: 220)
         .padding(10)
-        .background(Theme.plate, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .background(Theme.plate, in: RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
     }
 
     private func metric(_ label: String, _ value: String) -> some View {
@@ -826,7 +1050,7 @@ struct ApprovalCard: View {
                 .lineLimit(5)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(12)
-                .background(Theme.plate, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .background(Theme.plate, in: RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 10)], spacing: 10) {
                 ForEach(approval.choices, id: \.self) { choice in
                     Button(choiceLabel(choice)) {
@@ -849,10 +1073,11 @@ struct ApprovalCard: View {
             }
         }
         .padding(18)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: Radius.xl, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Radius.xl, style: .continuous)
             .strokeBorder(Theme.danger.opacity(0.45), lineWidth: 1))
         .shadow(color: .black.opacity(0.12), radius: 20, y: 8)
+        .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 
     private func choiceLabel(_ choice: String) -> String {
@@ -921,7 +1146,7 @@ struct ClarifyCard: View {
                                             .accessibilityHidden(true)
                                     }
                                     .padding(.vertical, 11).padding(.horizontal, 14)
-                                    .background(Theme.plate, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                    .background(Theme.plate, in: RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
                                 }
                                 .buttonStyle(.plain)
                                 .disabled(submitting.contains(q.id))
@@ -949,9 +1174,10 @@ struct ClarifyCard: View {
             }
         }
         .padding(18)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: Radius.xl, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Radius.xl, style: .continuous)
             .strokeBorder(Theme.hairline, lineWidth: 1))
+        .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 
     private func textBinding(for id: String) -> Binding<String> {
@@ -1025,7 +1251,7 @@ private struct AgentMediaView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Image(uiImage: img).resizable().scaledToFit()
                     .frame(maxWidth: 260, maxHeight: 260)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
                     .onTapGesture { showFull = true }
                     .accessibilityLabel("Image \(media.name). Tap to view full screen.")
                     .fullScreenCover(isPresented: $showFull) { ImageViewer(data: data) }
@@ -1036,7 +1262,7 @@ private struct AgentMediaView: View {
         } else if failed {
             placeholder(icon: "photo", text: media.name)
         } else {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
                 .fill(Theme.hairline.opacity(0.4))
                 .frame(width: 160, height: 120)
                 .overlay(ProgressView())
@@ -1066,7 +1292,7 @@ private struct AgentMediaView: View {
                 Image(systemName: "square.and.arrow.up").foregroundStyle(Theme.muted)
             }
             .padding(12)
-            .background(Theme.hairline.opacity(0.25), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(Theme.hairline.opacity(0.25), in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("File \(media.name). Tap to open or share.")
@@ -1079,7 +1305,7 @@ private struct AgentMediaView: View {
             Text(text).font(Theme.mono(11)).foregroundStyle(Theme.muted)
         }
         .padding(10)
-        .background(Theme.hairline.opacity(0.25), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(Theme.hairline.opacity(0.25), in: RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
     }
 }
 

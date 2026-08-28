@@ -9,16 +9,16 @@ struct ActivityView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: Space.row) {
                     Eyebrow("Activity")
-                        .padding(.horizontal, 24).padding(.top, 8)
+                        .padding(.horizontal, Space.gutter).padding(.top, 8)
                     ForEach(app.activityFeed) { item in
                         Button { onSelect(item) } label: { ActivityRow(item: item) }
                             .buttonStyle(.plain)
                             .accessibilityIdentifier("activity:\(item.id)")
                             .accessibilityHint("Opens this event in Chat")
                     }
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, Space.gutter)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)  // fill width so
                 .padding(.bottom, 20)                              // .paper() covers the

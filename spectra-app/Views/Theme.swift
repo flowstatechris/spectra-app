@@ -37,6 +37,24 @@ enum Theme {
     }
 }
 
+/// Four-step corner scale. Every rounded shape in the app lands on one of
+/// these; previously the same visual weight was drawn at 8/9/10 or 16/18 or
+/// 20/22 depending on which view drew it.
+enum Radius {
+    static let sm: CGFloat = 10   // chips, inline plates, small tiles
+    static let md: CGFloat = 14   // receipts, thumbnails, detail boxes
+    static let lg: CGFloat = 18   // message bubbles, cards
+    static let xl: CGFloat = 22   // elevated sheets, the input field
+}
+
+enum Space {
+    /// One outer horizontal margin for every screen. The chat header used to
+    /// mix 18 (compact) and 24 (expanded), so it slid sideways on every
+    /// collapse; the other tabs used 24 and the thread 18.
+    static let gutter: CGFloat = 20
+    static let row: CGFloat = 12   // spacing between stacked list rows
+}
+
 private extension UIColor {
     convenience init(rgb: Int) {
         self.init(red: CGFloat((rgb >> 16) & 0xFF) / 255,
@@ -77,8 +95,8 @@ struct CardSurface: ViewModifier {
     var border: Color = Theme.hairline
     func body(content: Content) -> some View {
         content
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
                 .strokeBorder(border, lineWidth: 1))
     }
 }
@@ -110,6 +128,62 @@ struct OutlineButton: ButtonStyle {
             .padding(.vertical, 11).padding(.horizontal, 16)
             .background(Capsule().strokeBorder(tint.opacity(0.4), lineWidth: 1))
             .opacity(configuration.isPressed ? 0.6 : 1)
+    }
+}
+
+// MARK: - Shimmer
+
+/// Sweeping highlight for in-flight text — the "thinking" shimmer.
+///
+/// Drives off `TimelineView(.animation)` like ThinkingOrb does (no Timer, no
+/// CADisplayLink to tear down; SwiftUI stops servicing it off-screen). The
+/// highlight is a moving gradient handed to `foregroundStyle` rather than an
+/// overlay masked by the text: a mask forces an offscreen pass every frame,
+/// and this rides on top of streaming text that is already re-laying out per
+/// token.
+private struct TextShimmer: ViewModifier {
+    let active: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private static let period: Double = 1.7
+
+    func body(content: Content) -> some View {
+        if !active || reduceMotion {
+            content.foregroundStyle(Theme.muted)
+        } else {
+            TimelineView(.animation) { timeline in
+                content.foregroundStyle(
+                    Self.sweep(at: timeline.date.timeIntervalSinceReferenceDate))
+            }
+        }
+    }
+
+    /// Highlight band travelling left→right, looping every `period` seconds.
+    /// Runs from -0.2 to 1.2 so the band enters and exits fully off the edges
+    /// instead of appearing to bounce at the ends.
+    private static func sweep(at t: TimeInterval) -> LinearGradient {
+        let phase = (t.truncatingRemainder(dividingBy: period) / period) * 1.4 - 0.2
+        let band = 0.18
+        let clamp = { (x: Double) in min(max(x, 0), 1) }
+        return LinearGradient(
+            stops: [
+                .init(color: Theme.muted, location: 0),
+                .init(color: Theme.muted, location: clamp(phase - band)),
+                .init(color: Theme.ink,   location: clamp(phase)),
+                .init(color: Theme.muted, location: clamp(phase + band)),
+                .init(color: Theme.muted, location: 1),
+            ],
+            startPoint: .leading, endPoint: .trailing)
+    }
+}
+
+extension View {
+    /// Shimmer this text while `active` — reads as "still working on it".
+    /// The modifier owns the text colour either way (settling to `Theme.muted`
+    /// when inactive or under Reduce Motion), so call sites must not set their
+    /// own `foregroundStyle` — the inner one would win and hide the sweep.
+    func shimmering(_ active: Bool = true) -> some View {
+        modifier(TextShimmer(active: active))
     }
 }
 
