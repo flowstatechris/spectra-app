@@ -54,6 +54,7 @@ struct BackendConfigView: View {
                     s = "http://" + s
                 }
                 guard let url = URLComponents(string: s)?.url, url.host != nil else { return }
+                Cuelume.shared.play(.press)
                 app.setBackend(url)
             }
             .buttonStyle(PrimaryButton())
@@ -79,25 +80,32 @@ struct LoginView: View {
     var body: some View {
         VStack(spacing: 0) {
             Spacer()
-            OrbView(status: .connecting, connectionState: .connecting)
+            OrbView(status: .connecting, connectionState: .connecting, showsLabel: false)
             Group {
                 if case .loggingIn = app.phase {
                     Eyebrow("Setting up your workspace", color: Theme.accent)
                         .padding(.top, 28)
                 } else {
-                    VStack(spacing: 14) {
-                        Eyebrow("Sign in")
-                        Text(app.backend?.displayName ?? "")
-                            .font(Theme.serif(28))
-                            .foregroundStyle(Theme.ink)
-                        Button("Continue with browser") { Task { await signIn() } }
-                            .buttonStyle(PrimaryButton())
-                            .padding(.horizontal, 40)
-                            .padding(.top, 4)
-                        Button("Change server") { app.editBackend() }
-                            .buttonStyle(OutlineButton())
+                    VStack(spacing: 24) {
+                        // Title is the hero; the server address is quiet context
+                        // below it (which instance you're signing into).
+                        VStack(spacing: 7) {
+                            Text("Sign in")
+                                .font(Theme.serif(30))
+                                .foregroundStyle(Theme.ink)
+                            Text(app.backend?.displayName ?? "")
+                                .font(Theme.mono(13))
+                                .foregroundStyle(Theme.muted)
+                        }
+                        VStack(spacing: 12) {
+                            Button("Continue with browser") { Task { await signIn() } }
+                                .buttonStyle(PrimaryButton())
+                                .padding(.horizontal, 40)
+                            Button("Change server") { app.editBackend() }
+                                .buttonStyle(OutlineButton())
+                        }
                     }
-                    .padding(.top, 28)
+                    .padding(.top, 32)
                 }
             }
             if case .error(let message) = app.phase {
@@ -158,6 +166,7 @@ struct ProfilePickerView: View {
             }
 
             Button("Add \(selected.count) profile\(selected.count == 1 ? "" : "s")") {
+                Cuelume.shared.play(.press)
                 app.addProfiles(Array(selected).sorted())
             }
             .buttonStyle(PrimaryButton())
@@ -171,6 +180,7 @@ struct ProfilePickerView: View {
     private func profileRow(_ profile: ProfileInfo) -> some View {
         let isOn = selected.contains(profile.name)
         return Button {
+            Cuelume.shared.play(.press)
             if isOn { selected.remove(profile.name) } else { selected.insert(profile.name) }
         } label: {
             HStack(spacing: 14) {

@@ -143,8 +143,10 @@ public final class AppState {
             try await connectRPC()
             try await loadProfiles()
             phase = .pickingProfiles
+            Cuelume.shared.play(.success)   // interactive login only — not silent restore
         } catch {
             phase = .error("Login failed: \(error)")
+            Cuelume.shared.play(.error)
         }
     }
 
@@ -187,6 +189,7 @@ public final class AppState {
             }
         }
         connectionError = "Can't reach \(backend?.displayName ?? "your backend")."
+        Cuelume.shared.play(.error)   // reconnect backoff exhausted (§12)
     }
 
     /// Manual retry from the offline banner.

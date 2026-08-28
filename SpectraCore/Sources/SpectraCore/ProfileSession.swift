@@ -37,6 +37,9 @@ public final class ProfileSession: Identifiable {
     /// just the current session (see Persistence.swift). ponytail: one entry
     /// per visited session; add an LRU cap if that ever bites.
     private var timelineCache: [String: [Message]] = [:]
+    /// Armed on send(), cleared after the turn's first agent activity — so the
+    /// `bloom` cue fires once per turn, not on every tool/delta. (SFX §1.8)
+    private var turnDidBloom = false
 
     public init(profile: ProfileInfo, rpc: HermesRPCConnection,
                 restoring messages: [Message] = [],
@@ -259,6 +262,7 @@ public final class ProfileSession: Identifiable {
                 .compactMap { $0 }.joined(separator: "\n\n")
             _ = try await rpc.call("prompt.submit", params: ["session_id": sid,
                                                               "text": submittedText])
+            turnDidBloom = false        // arm the bloom cue for this turn
             status = .thinking(search: false)
         } catch {
             recordError("Couldn't send message: \(error)")
@@ -347,6 +351,7 @@ public final class ProfileSession: Identifiable {
             // true chronological position.
             streamingMessageID = nil
             status = .speaking
+            bloomOnce()
 
         case "message.delta":
             guard let text = event.payload?["text"] as? String else { return }
@@ -367,12 +372,16 @@ public final class ProfileSession: Identifiable {
                 }
             }
             streamingMessageID = nil
-            if pendingApproval == nil { status = .idle }
+            if pendingApproval == nil {
+                status = .idle
+                Cuelume.shared.play(.scan)   // response finished
+            }
 
         case "tool.start", "tool.started":
             let name = (event.payload?["name"] as? String ?? "").lowercased()
             let isSearch = name.contains("search") || name.contains("web") || name.contains("browse")
             status = .thinking(search: isSearch)
+            bloomOnce()
             startTool(event)
 
         case "tool.generating":
@@ -393,6 +402,7 @@ public final class ProfileSession: Identifiable {
                 pendingApproval = approval
                 upsertApproval(approval)
                 status = .alert
+                Cuelume.shared.play(.arrival)   // agent needs the user
             }
 
         case "approval.expire":
@@ -408,6 +418,7 @@ public final class ProfileSession: Identifiable {
                let clarify = ClarifyRequest(sessionID: event.sessionID, payload: payload) {
                 pendingClarify = clarify
                 upsertClarification(clarify)
+                Cuelume.shared.play(.arrival)   // agent asked a question
             }
 
         case "clarify.expire":
@@ -443,6 +454,18 @@ public final class ProfileSession: Identifiable {
 
         default:
             break
+        }
+    }
+
+    /// First agent activity of a turn → play `bloom` once, 0.75s later so it
+    /// doesn't stack on the send `press` cue when the agent replies fast. Skipped
+    /// if the turn already finished (idle) by the time the delay elapses. (SFX §1.8)
+    private func bloomOnce() {
+        guard !turnDidBloom else { return }
+        turnDidBloom = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(0.75))
+            if isRunning { Cuelume.shared.play(.bloom) }
         }
     }
 

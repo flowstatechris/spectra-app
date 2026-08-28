@@ -326,6 +326,7 @@ struct ChatView: View {
                     Button {
                         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard canSend(session) else { return }
+                        Cuelume.shared.play(.press)
                         draft = ""
                         Task { await session.send(text) }
                     } label: {
@@ -829,6 +830,7 @@ struct ApprovalCard: View {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 10)], spacing: 10) {
                 ForEach(approval.choices, id: \.self) { choice in
                     Button(choiceLabel(choice)) {
+                        Cuelume.shared.play(.press)
                         isSubmitting = true
                         Task {
                             let resolved = await session.resolveApproval(choice: choice)
@@ -957,6 +959,7 @@ struct ClarifyCard: View {
     }
 
     private func toggle(_ choice: String, for id: String) {
+        Cuelume.shared.play(.press)
         if selections[id, default: []].contains(choice) {
             selections[id]?.remove(choice)
         } else {
@@ -965,6 +968,7 @@ struct ClarifyCard: View {
     }
 
     private func submit(_ question: ClarifyRequest.Question, answer: String) {
+        Cuelume.shared.play(.press)
         submitting.insert(question.id)
         Task {
             let accepted = await session.answerClarify(questionID: question.id, answer: answer)
