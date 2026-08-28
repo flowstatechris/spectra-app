@@ -1,15 +1,62 @@
 import SwiftUI
 import SpectraCore
 
-/// Renders agent markdown (spec §9, upgraded past v1's plain-mono). Block
-/// structure comes from Markdown.blocks; inline syntax (bold/italic/`code`/
-/// links) is rendered natively by SwiftUI's AttributedString markdown.
+/// A markdown block with its inline syntax already parsed to AttributedString.
+/// Everything expensive (block split + AttributedString(markdown:)) is computed
+/// once, off the main thread, so rendering — and re-rendering as LazyVStack rows
+/// scroll in and out — never parses on the main actor.
+enum RenderedBlock: Equatable, Sendable {
+    case paragraph(AttributedString)
+    case heading(level: Int, text: AttributedString)
+    case bullets([AttributedString])
+    case numbered([AttributedString])
+    case code(language: String?, code: String)
+    case quote(AttributedString)
+    case rule
+
+    /// Native inline markdown; preserves whitespace, degrades to plain on failure.
+    private static func inline(_ s: String) -> AttributedString {
+        (try? AttributedString(
+            markdown: s,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(s)
+    }
+
+    /// Pure, main-thread-free: block structure + inline parse for a whole message.
+    static func render(_ text: String) -> [RenderedBlock] {
+        Markdown.blocks(text).map { block in
+            switch block {
+            case .paragraph(let s):        return .paragraph(inline(s))
+            case .heading(let l, let s):   return .heading(level: l, text: inline(s))
+            case .bullets(let items):      return .bullets(items.map(inline))
+            case .numbered(let items):     return .numbered(items.map(inline))
+            case .code(let lang, let code):return .code(language: lang, code: code)
+            case .quote(let s):            return .quote(inline(s))
+            case .rule:                    return .rule
+            }
+        }
+    }
+}
+
+/// Bounded cache of rendered messages, so a row scrolling back into view reuses
+/// its parse instead of recomputing. Main-actor isolated; the parse itself runs
+/// off-main and only the lookup/store touch this.
+@MainActor
+private final class MarkdownCache {
+    static let shared = MarkdownCache()
+    private final class Box { let blocks: [RenderedBlock]; init(_ b: [RenderedBlock]) { blocks = b } }
+    private let cache = NSCache<NSString, Box>()
+    init() { cache.countLimit = 200 }
+    func get(_ key: String) -> [RenderedBlock]? { cache.object(forKey: key as NSString)?.blocks }
+    func set(_ key: String, _ v: [RenderedBlock]) { cache.setObject(Box(v), forKey: key as NSString) }
+}
+
+/// Renders agent markdown (spec §9). Block structure from Markdown.blocks, inline
+/// syntax pre-parsed to AttributedString — both off the main thread (see
+/// RenderedBlock.render) and cached, so scrolling through long threads is smooth.
 struct MarkdownText: View {
     let text: String
-    // Parse once per distinct text (via .task(id:)), not on every body pass —
-    // sibling updates (new tool rows, other streaming) would otherwise reparse
-    // every rendered message each event.
-    @State private var blocks: [Markdown.Block] = []
+    @State private var blocks: [RenderedBlock] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -17,20 +64,23 @@ struct MarkdownText: View {
                 view(for: block)
             }
         }
-        // Parse off the main thread — a completed row scrolling into view
-        // during an active stream must not block the main actor on a big parse.
-        .task(id: text) { blocks = await Task.detached { Markdown.blocks(text) }.value }
+        .task(id: text) {
+            if let cached = MarkdownCache.shared.get(text) { blocks = cached; return }
+            let rendered = await Task.detached { RenderedBlock.render(text) }.value
+            MarkdownCache.shared.set(text, rendered)
+            blocks = rendered
+        }
     }
 
-    @ViewBuilder private func view(for block: Markdown.Block) -> some View {
+    @ViewBuilder private func view(for block: RenderedBlock) -> some View {
         switch block {
         case .paragraph(let s):
-            Text(inline(s))
+            Text(s)
                 .font(Theme.mono(14)).foregroundStyle(Theme.ink)
                 .textSelection(.enabled)
 
         case .heading(let level, let s):
-            Text(inline(s))
+            Text(s)
                 .font(Theme.serif(headingSize(level)))
                 .foregroundStyle(Theme.ink)
                 .padding(.top, 2)
@@ -55,7 +105,7 @@ struct MarkdownText: View {
         case .quote(let s):
             HStack(alignment: .top, spacing: 10) {
                 Rectangle().fill(Theme.accent.opacity(0.5)).frame(width: 2)
-                Text(inline(s)).font(Theme.mono(14)).foregroundStyle(Theme.muted)
+                Text(s).font(Theme.mono(14)).foregroundStyle(Theme.muted)
             }
 
         case .rule:
@@ -63,24 +113,16 @@ struct MarkdownText: View {
         }
     }
 
-    private func marker(_ mark: String, _ item: String) -> some View {  // list row
+    private func marker(_ mark: String, _ item: AttributedString) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Text(mark).font(Theme.mono(14)).foregroundStyle(Theme.muted)
                 .frame(minWidth: 16, alignment: .trailing)
-            Text(inline(item)).font(Theme.mono(14)).foregroundStyle(Theme.ink)
+            Text(item).font(Theme.mono(14)).foregroundStyle(Theme.ink)
         }
     }
 
     private func headingSize(_ level: Int) -> CGFloat {
         switch level { case 1: return 22; case 2: return 19; case 3: return 17; default: return 15 }
-    }
-
-    /// Native inline markdown; preserves whitespace, degrades to plain on parse failure.
-    private func inline(_ s: String) -> AttributedString {
-        (try? AttributedString(
-            markdown: s,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(s)
     }
 }
 
