@@ -200,6 +200,13 @@ public final class AppState {
 
     // MARK: Profiles
 
+    /// Refresh the full profile list from the backend so the Profiles tab can
+    /// offer profiles not yet added (after relaunch, availableProfiles holds
+    /// only the added ones). Best-effort; keeps the current list on error.
+    public func refreshAvailableProfiles() async {
+        try? await loadProfiles()
+    }
+
     public func addProfiles(_ names: [String]) {
         guard let rpc else { return }
         for name in names {

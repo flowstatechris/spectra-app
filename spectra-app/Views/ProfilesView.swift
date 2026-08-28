@@ -5,6 +5,7 @@ import SpectraCore
 /// read-only rich detail. Cockpit, not a garage.
 struct ProfilesView: View {
     @Environment(AppState.self) private var app
+    @State private var addingProfile = false
 
     var body: some View {
         NavigationStack {
@@ -27,6 +28,15 @@ struct ProfilesView: View {
             .paper()
             .navigationTitle("Profiles")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { addingProfile = true } label: {
+                        Image(systemName: "plus")
+                    }
+                    .accessibilityLabel("Add profile")
+                }
+            }
+            .sheet(isPresented: $addingProfile) { AddProfileSheet() }
             .overlay {
                 if app.sessions.isEmpty {
                     VStack(spacing: 14) {
@@ -118,6 +128,72 @@ struct ProfileDetailView: View {
                 Eyebrow(label)
                 Text(value).font(Theme.mono(15)).foregroundStyle(Theme.ink)
             }
+        }
+    }
+}
+
+/// Add profiles after onboarding. Lists backend profiles not already added;
+/// tap to select, Add to create their sessions. (Profiles were previously only
+/// choosable during onboarding.)
+struct AddProfileSheet: View {
+    @Environment(AppState.self) private var app
+    @Environment(\.dismiss) private var dismiss
+    @State private var selected: Set<String> = []
+    @State private var loading = true
+
+    private var addable: [ProfileInfo] {
+        app.availableProfiles
+            .filter { app.sessions[$0.name] == nil }
+            .sorted { $0.name < $1.name }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if loading {
+                    HStack { Spacer(); ProgressView(); Spacer() }
+                        .listRowBackground(Color.clear)
+                } else if addable.isEmpty {
+                    Text("All profiles are already added.")
+                        .font(Theme.mono(12)).foregroundStyle(Theme.muted)
+                        .listRowBackground(Color.clear)
+                } else {
+                    ForEach(addable) { profile in
+                        Button {
+                            if selected.contains(profile.name) { selected.remove(profile.name) }
+                            else { selected.insert(profile.name) }
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(profile.name).font(Theme.serif(20)).foregroundStyle(Theme.ink)
+                                    if !profile.model.isEmpty {
+                                        Text(profile.model).font(Theme.mono(11)).foregroundStyle(Theme.muted)
+                                    }
+                                }
+                                Spacer()
+                                Image(systemName: selected.contains(profile.name)
+                                      ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(selected.contains(profile.name) ? Theme.accent : Theme.hairline)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .navigationTitle("Add Profile")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add") { app.addProfiles(Array(selected)); dismiss() }
+                        .disabled(selected.isEmpty)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .task {
+            await app.refreshAvailableProfiles()
+            loading = false
         }
     }
 }
