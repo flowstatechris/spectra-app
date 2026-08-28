@@ -162,10 +162,16 @@ struct ChatView: View {
             } action: { _, scrolled in
                 scrolledIntoConversation = scrolled
             }
-            .onChange(of: session.messages.last) {
-                if let last = session.messages.last {
-                    proxy.scrollTo(last.id, anchor: .bottom)
-                }
+            // Follow the conversation to the bottom. Key on O(1) values (row
+            // count for new messages, last text length for streaming growth) —
+            // NOT `messages.last`, whose Equatable compare walks the whole
+            // growing message string every token = a hidden O(n²) on the main
+            // thread during a long reply.
+            .onChange(of: session.messages.count) {
+                if let id = session.messages.last?.id { proxy.scrollTo(id, anchor: .bottom) }
+            }
+            .onChange(of: session.messages.last?.text.count) {
+                if let id = session.messages.last?.id { proxy.scrollTo(id, anchor: .bottom) }
             }
             .onAppear { scrollToActivity(in: session, proxy: proxy) }
             .onChange(of: app.chatScrollTargetID) {
