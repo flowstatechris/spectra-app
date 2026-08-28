@@ -27,6 +27,12 @@ public final class ProfileSession: Identifiable {
 
     private let rpc: HermesRPCConnection
     private var streamingMessageID: String?
+    /// Rich local timelines by durable session id, so switching away and back
+    /// restores folded tool/approval/clarify rows instead of downgrading to
+    /// server text history. In-memory for this run only — persistence keeps
+    /// just the current session (see Persistence.swift). ponytail: one entry
+    /// per visited session; add an LRU cap if that ever bites.
+    private var timelineCache: [String: [Message]] = [:]
 
     public init(profile: ProfileInfo, rpc: HermesRPCConnection,
                 restoring messages: [Message] = [],
@@ -121,6 +127,7 @@ public final class ProfileSession: Identifiable {
     /// Start a fresh server conversation, clearing the visible timeline.
     public func newSession() async {
         guard canSwitchSessions else { return }
+        if let current = storedSessionID { timelineCache[current] = messages }
         do {
             let r = try await rpc.call("session.create",
                                        params: ["profile": profile.name,
@@ -136,6 +143,7 @@ public final class ProfileSession: Identifiable {
     /// pulls messages, because the user is deliberately changing conversations.
     public func switchTo(_ storedID: String) async {
         guard canSwitchSessions, storedID != storedSessionID else { return }
+        if let current = storedSessionID { timelineCache[current] = messages }
         status = .connecting
         do {
             let r = try await rpc.call("session.resume",
@@ -143,7 +151,8 @@ public final class ProfileSession: Identifiable {
                                                 "profile": profile.name])
             adopt(runtimeID: r["session_id"] as? String,
                   storedID: (r["stored_session_id"] as? String) ?? storedID,
-                  messages: Self.mapHistory(r["messages"]))
+                  messages: Self.reconcile(cached: timelineCache[storedID],
+                                           server: Self.mapHistory(r["messages"])))
         } catch {
             status = .idle
             recordError("Couldn't open that chat.")
@@ -177,6 +186,18 @@ public final class ProfileSession: Identifiable {
             default: return nil
             }
         }
+    }
+
+    /// Pick between a cached rich local timeline and freshly-pulled server
+    /// history when reopening a session. User-turn count is the progress marker:
+    /// if the cache has at least as many user turns, the conversation hasn't
+    /// advanced elsewhere, so keep the richer local rows (tool/approval/clarify);
+    /// otherwise the server is ahead (continued on another client) and its text
+    /// history wins. Empty/absent cache → server.
+    nonisolated static func reconcile(cached: [Message]?, server: [Message]) -> [Message] {
+        guard let cached, !cached.isEmpty else { return server }
+        let userTurns: ([Message]) -> Int = { $0.lazy.filter { $0.role == .user }.count }
+        return userTurns(cached) >= userTurns(server) ? cached : server
     }
 
     // MARK: Attention (handoff §6)
