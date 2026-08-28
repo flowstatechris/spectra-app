@@ -58,9 +58,10 @@ public struct Message: Identifiable, Sendable, Equatable, Codable {
     /// A sent image (§9). The uploaded file lives at a server-local path we
     /// can't fetch, so we keep a small downscaled JPEG to render inline. `name`
     /// is the server filename for reference.
-    public struct Attachment: Sendable, Equatable, Codable {
+    public struct Attachment: Identifiable, Sendable, Equatable, Codable {
         public enum Kind: String, Sendable, Equatable, Codable { case image, file }
 
+        public let id: String
         public let name: String
         public let thumbnailJPEG: Data
         public let kind: Kind
@@ -70,9 +71,10 @@ public struct Message: Identifiable, Sendable, Equatable, Codable {
         /// the displayed user message, but prepended to the submitted prompt.
         public let reference: String?
 
-        public init(name: String, thumbnailJPEG: Data = Data(), kind: Kind = .image,
-                    byteCount: Int? = nil, contentType: String? = nil,
+        public init(id: String = UUID().uuidString, name: String, thumbnailJPEG: Data = Data(),
+                    kind: Kind = .image, byteCount: Int? = nil, contentType: String? = nil,
                     reference: String? = nil) {
+            self.id = id
             self.name = name
             self.thumbnailJPEG = thumbnailJPEG
             self.kind = kind
@@ -82,11 +84,12 @@ public struct Message: Identifiable, Sendable, Equatable, Codable {
         }
 
         enum CodingKeys: String, CodingKey {
-            case name, thumbnailJPEG, kind, byteCount, contentType, reference
+            case id, name, thumbnailJPEG, kind, byteCount, contentType, reference
         }
 
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
+            id = try c.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
             name = try c.decode(String.self, forKey: .name)
             thumbnailJPEG = try c.decode(Data.self, forKey: .thumbnailJPEG)
             kind = try c.decodeIfPresent(Kind.self, forKey: .kind) ?? .image
@@ -119,31 +122,48 @@ public struct Message: Identifiable, Sendable, Equatable, Codable {
     public let role: Role
     public var text: String
     public var kind: Kind
-    public var attachment: Attachment?
+    public var attachments: [Attachment]
     public var media: [ReceivedMedia]
 
     public init(id: String = UUID().uuidString, role: Role, text: String,
-                kind: Kind = .plain, attachment: Attachment? = nil,
+                kind: Kind = .plain, attachments: [Attachment] = [],
                 media: [ReceivedMedia] = []) {
         self.id = id
         self.role = role
         self.text = text
         self.kind = kind
-        self.attachment = attachment
+        self.attachments = attachments
         self.media = media
     }
 
     // Hand-rolled Codable so a cached thread written before `media` existed
     // still decodes (keeps §10 instant cold-launch across app upgrades).
-    enum CodingKeys: String, CodingKey { case id, role, text, kind, attachment, media }
+    enum CodingKeys: String, CodingKey { case id, role, text, kind, attachments, attachment, media }
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
         role = try c.decode(Role.self, forKey: .role)
         text = try c.decode(String.self, forKey: .text)
         kind = try c.decode(Kind.self, forKey: .kind)
-        attachment = try c.decodeIfPresent(Attachment.self, forKey: .attachment)
+        if let arr = try c.decodeIfPresent([Attachment].self, forKey: .attachments) {
+            attachments = arr
+        } else if let one = try c.decodeIfPresent(Attachment.self, forKey: .attachment) {
+            attachments = [one]   // legacy cache written before multi-attachment
+        } else {
+            attachments = []
+        }
         media = try c.decodeIfPresent([ReceivedMedia].self, forKey: .media) ?? []
+    }
+
+    // Explicit encode: never write the legacy singular `attachment` key.
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(role, forKey: .role)
+        try c.encode(text, forKey: .text)
+        try c.encode(kind, forKey: .kind)
+        try c.encode(attachments, forKey: .attachments)
+        try c.encode(media, forKey: .media)
     }
 }
 

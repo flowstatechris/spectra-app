@@ -257,7 +257,7 @@ public final class AppState {
             let path = try await Attachments.upload(baseURL: backend.baseURL, token: token,
                         profile: profileName, data: imageData, filename: filename, mime: mime)
             _ = try await rpc.call("image.attach", params: ["session_id": sid, "path": path])
-            session.setPendingAttachment(.init(name: (path as NSString).lastPathComponent,
+            session.addPendingAttachment(.init(name: (path as NSString).lastPathComponent,
                                                thumbnailJPEG: thumbnail))
         } catch {
             session.noteError("Couldn't attach image")
@@ -266,7 +266,7 @@ public final class AppState {
 
     /// Stage a non-image file with Hermes and retain its rewritten `@file:`
     /// reference for the next prompt. One pending attachment matches the
-    /// existing image composer model; selecting another replaces it.
+    /// existing image composer model; multiple may be staged and ride together.
     public func attachFile(profileName: String, data: Data, filename: String,
                            mime: String) async {
         guard let session = sessions[profileName], let rpc else { return }
@@ -284,7 +284,7 @@ public final class AppState {
                 session.noteError("Couldn't attach \(filename)")
                 return
             }
-            session.setPendingAttachment(.init(name: filename, kind: .file,
+            session.addPendingAttachment(.init(name: filename, kind: .file,
                                                 byteCount: data.count, contentType: mime,
                                                 reference: reference))
         } catch {

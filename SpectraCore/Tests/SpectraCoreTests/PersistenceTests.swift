@@ -15,9 +15,9 @@ final class PersistenceTests: XCTestCase {
         ])!
         let timestamp = Date(timeIntervalSince1970: 1_800_000_000)
         let messages = [
-            Message(role: .user, text: "hey", attachment: .init(
+            Message(role: .user, text: "hey", attachments: [.init(
                 name: "notes.txt", kind: .file, byteCount: 12,
-                contentType: "text/plain", reference: "@file:notes.txt")),
+                contentType: "text/plain", reference: "@file:notes.txt")]),
             Message(role: .agent, text: "hi", kind: .status),
             Message(role: .agent, text: "", kind: .toolActivity(
                 ToolActivity(id: "t1", toolName: "terminal", context: "swift test",

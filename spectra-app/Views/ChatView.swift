@@ -9,7 +9,7 @@ import ThinkingOrbsKit
 struct ChatView: View {
     @Environment(AppState.self) private var app
     @State private var draft = ""
-    @State private var pickerItem: PhotosPickerItem?
+    @State private var pickerItems: [PhotosPickerItem] = []
     @State private var showingPhotoLibrary = false
     @State private var showingCamera = false
     @State private var showingFileImporter = false
@@ -223,8 +223,8 @@ struct ChatView: View {
     private func inputBar(_ session: ProfileSession) -> some View {
         VStack(spacing: 0) {
             Hairline()
-            if let a = session.pendingAttachment {
-                pendingStrip(a, session)
+            if !session.pendingAttachments.isEmpty {
+                pendingStrip(session)
             }
             HStack(spacing: 12) {
                 Menu {
@@ -301,19 +301,21 @@ struct ChatView: View {
             }
             .padding(.horizontal, 16).padding(.vertical, 12)
         }
-        .onChange(of: pickerItem) { _, item in
-            guard let item else { return }
+        .onChange(of: pickerItems) { _, items in
+            guard !items.isEmpty else { return }
             Task {
-                defer { pickerItem = nil }
-                guard let raw = try? await item.loadTransferable(type: Data.self),
-                      let ui = UIImage(data: raw) else { return }
-                await app.attachImage(profileName: session.profile.name,
-                                      imageData: ui.jpeg(maxDim: 1600, quality: 0.8),
-                                      thumbnail: ui.jpeg(maxDim: 240, quality: 0.7))
+                defer { pickerItems = [] }
+                for item in items {
+                    guard let raw = try? await item.loadTransferable(type: Data.self),
+                          let ui = UIImage(data: raw) else { continue }
+                    await app.attachImage(profileName: session.profile.name,
+                                          imageData: ui.jpeg(maxDim: 1600, quality: 0.8),
+                                          thumbnail: ui.jpeg(maxDim: 240, quality: 0.7))
+                }
             }
         }
-        .photosPicker(isPresented: $showingPhotoLibrary, selection: $pickerItem,
-                      matching: .images)
+        .photosPicker(isPresented: $showingPhotoLibrary, selection: $pickerItems,
+                      maxSelectionCount: 4, matching: .images)
         .sheet(isPresented: $showingCamera) {
             CameraPicker { image in
                 Task {
@@ -330,31 +332,33 @@ struct ChatView: View {
         }
     }
 
-    private func pendingStrip(_ a: Message.Attachment, _ session: ProfileSession) -> some View {
-        HStack(spacing: 10) {
-            if a.kind == .image, let img = UIImage(data: a.thumbnailJPEG) {
-                Image(uiImage: img).resizable().scaledToFill()
-                    .frame(width: 44, height: 44)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            } else {
-                Image(systemName: "doc.fill")
-                    .font(.title3).foregroundStyle(Theme.accent)
-                    .frame(width: 44, height: 44)
-                    .background(Theme.plate, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(a.name).font(Theme.mono(11)).foregroundStyle(Theme.ink).lineLimit(1)
-                if let count = a.byteCount {
-                    Text(ByteCountFormatter.string(fromByteCount: Int64(count), countStyle: .file))
-                        .font(Theme.mono(10)).foregroundStyle(Theme.muted)
+    private func pendingStrip(_ session: ProfileSession) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                ForEach(session.pendingAttachments) { a in
+                    HStack(spacing: 8) {
+                        if a.kind == .image, let img = UIImage(data: a.thumbnailJPEG) {
+                            Image(uiImage: img).resizable().scaledToFill()
+                                .frame(width: 40, height: 40)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        } else {
+                            Image(systemName: "doc.fill")
+                                .font(.title3).foregroundStyle(Theme.accent)
+                                .frame(width: 40, height: 40)
+                                .background(Theme.plate, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        }
+                        Text(a.name).font(Theme.mono(11)).foregroundStyle(Theme.ink)
+                            .lineLimit(1).frame(maxWidth: 120)
+                        Button { session.removePendingAttachment(id: a.id) } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.muted)
+                        }.accessibilityLabel("Remove \(a.name)")
+                    }
+                    .padding(.leading, 4).padding(.trailing, 8).padding(.vertical, 4)
+                    .background(Theme.plate.opacity(0.5), in: Capsule())
                 }
             }
-            Spacer()
-            Button { session.setPendingAttachment(nil) } label: {
-                Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.muted)
-            }.accessibilityLabel("Remove attachment")
+            .padding(.horizontal, 16).padding(.top, 10)
         }
-        .padding(.horizontal, 16).padding(.top, 10)
     }
 
     private func importFile(_ result: Result<URL, Error>, session: ProfileSession) {
@@ -382,7 +386,40 @@ struct ChatView: View {
     private func canSend(_ session: ProfileSession) -> Bool {
         session.canSend &&
         (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-         || session.pendingAttachment != nil)   // image-only send allowed
+         || !session.pendingAttachments.isEmpty)   // attachment-only send allowed
+    }
+}
+
+/// One attachment on a sent user message. Its own full-screen state so several
+/// images in one message each open independently (§4 multi-attachment).
+private struct UserAttachmentBubble: View {
+    let attachment: Message.Attachment
+    @State private var showFull = false
+
+    var body: some View {
+        if attachment.kind == .image, let img = UIImage(data: attachment.thumbnailJPEG) {
+            Image(uiImage: img).resizable().scaledToFill()
+                .frame(maxWidth: 200, maxHeight: 200)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .onTapGesture { showFull = true }
+                .accessibilityLabel("Attached image \(attachment.name). Tap to view full screen.")
+                .fullScreenCover(isPresented: $showFull) {
+                    ImageViewer(data: attachment.thumbnailJPEG)
+                }
+        } else {
+            HStack(spacing: 10) {
+                Image(systemName: "doc.fill").foregroundStyle(Theme.accent)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(attachment.name).font(Theme.mono(12)).foregroundStyle(Theme.ink).lineLimit(1)
+                    if let count = attachment.byteCount {
+                        Text(ByteCountFormatter.string(fromByteCount: Int64(count), countStyle: .file))
+                            .font(Theme.mono(10)).foregroundStyle(Theme.muted)
+                    }
+                }
+            }
+            .padding(12)
+            .background(Theme.plate, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
     }
 }
 
@@ -390,7 +427,6 @@ struct MessageRow: View {
     let message: SpectraCore.Message
     let session: ProfileSession
     @Binding var collapsedApprovalID: String?
-    @State private var showFullImage = false
 
     var body: some View {
         switch message.kind {
@@ -436,32 +472,8 @@ struct MessageRow: View {
         case .plain:
             if message.role == .user {
                 VStack(alignment: .trailing, spacing: 6) {
-                    if let a = message.attachment {
-                        if a.kind == .image, let img = UIImage(data: a.thumbnailJPEG) {
-                            Image(uiImage: img).resizable().scaledToFill()
-                                .frame(maxWidth: 200, maxHeight: 200)
-                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                                .onTapGesture { showFullImage = true }
-                                .accessibilityLabel("Attached image \(a.name). Tap to view full screen.")
-                                .fullScreenCover(isPresented: $showFullImage) {
-                                    ImageViewer(data: a.thumbnailJPEG)
-                                }
-                        } else {
-                            HStack(spacing: 10) {
-                                Image(systemName: "doc.fill").foregroundStyle(Theme.accent)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(a.name).font(Theme.mono(12)).foregroundStyle(Theme.ink).lineLimit(1)
-                                    if let count = a.byteCount {
-                                        Text(ByteCountFormatter.string(fromByteCount: Int64(count),
-                                                                       countStyle: .file))
-                                            .font(Theme.mono(10)).foregroundStyle(Theme.muted)
-                                    }
-                                }
-                            }
-                            .padding(12)
-                            .background(Theme.plate,
-                                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        }
+                    ForEach(message.attachments) { a in
+                        UserAttachmentBubble(attachment: a)
                     }
                     if !message.text.isEmpty {
                         Text(message.text)

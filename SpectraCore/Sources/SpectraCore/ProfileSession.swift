@@ -23,7 +23,7 @@ public final class ProfileSession: Identifiable {
     public private(set) var lastError: String?
     /// Image staged on the server (via image.attach) waiting to ride the next
     /// send() as an inline thumbnail on the user's message (§9).
-    public private(set) var pendingAttachment: Message.Attachment?
+    public private(set) var pendingAttachments: [Message.Attachment] = []
 
     private let rpc: HermesRPCConnection
     private var streamingMessageID: String?
@@ -88,7 +88,7 @@ public final class ProfileSession: Identifiable {
         streamingMessageID = nil
         pendingApproval = nil
         pendingClarify = nil
-        pendingAttachment = nil     // staging died with the session
+        pendingAttachments = []     // staging died with the session
         status = .idle
     }
 
@@ -234,20 +234,24 @@ public final class ProfileSession: Identifiable {
         }
     }
 
-    public func setPendingAttachment(_ a: Message.Attachment?) { pendingAttachment = a }
+    public func addPendingAttachment(_ a: Message.Attachment) { pendingAttachments.append(a) }
+    public func removePendingAttachment(id: String) { pendingAttachments.removeAll { $0.id == id } }
+    public func clearPendingAttachments() { pendingAttachments = [] }
     public func noteError(_ text: String) { recordError(text) }
 
     public func send(_ text: String) async {
         guard pendingApproval == nil else { return }  // hard block at model layer
-        // Image already staged server-side via image.attach; ride it on this message.
-        let attach = pendingAttachment
-        guard !text.isEmpty || attach != nil else { return }
+        // Attachments already staged server-side (image.attach / file.attach);
+        // ride their references on this message. Images carry a nil reference
+        // (attached out-of-band by path); files carry an @-reference to prepend.
+        let attachments = pendingAttachments
+        guard !text.isEmpty || !attachments.isEmpty else { return }
         do {
             try await ensureSession()
             guard let sid = serverSessionID else { return }
-            messages.append(Message(role: .user, text: text, attachment: attach))
-            pendingAttachment = nil
-            let submittedText = [attach?.reference, text.isEmpty ? nil : text]
+            messages.append(Message(role: .user, text: text, attachments: attachments))
+            pendingAttachments = []
+            let submittedText = (attachments.compactMap(\.reference) + [text.isEmpty ? nil : text])
                 .compactMap { $0 }.joined(separator: "\n\n")
             _ = try await rpc.call("prompt.submit", params: ["session_id": sid,
                                                               "text": submittedText])
