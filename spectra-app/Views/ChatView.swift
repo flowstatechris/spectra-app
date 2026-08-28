@@ -490,8 +490,8 @@ struct MessageRow: View {
                     Rectangle().fill(Theme.accent.opacity(0.5)).frame(width: 2)
                     VStack(alignment: .leading, spacing: 10) {
                         if !message.text.isEmpty {
-                            if session.status == .speaking,
-                               message.id == session.messages.last?.id {
+                            if message.id == session.streamingMessageID {
+                                // Live stream: plain text, no per-token markdown reparse.
                                 Text(message.text)
                                     .font(Theme.mono(14))
                                     .foregroundStyle(Theme.ink)

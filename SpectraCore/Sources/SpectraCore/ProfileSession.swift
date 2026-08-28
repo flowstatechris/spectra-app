@@ -26,7 +26,11 @@ public final class ProfileSession: Identifiable {
     public private(set) var pendingAttachments: [Message.Attachment] = []
 
     private let rpc: HermesRPCConnection
-    private var streamingMessageID: String?
+    /// Id of the message currently being streamed (set on first token, cleared
+    /// at message.complete). Views read it to render the live message as plain
+    /// text and skip markdown re-parsing until the stream ends (avoids an O(n²)
+    /// reparse-per-token freeze on long replies).
+    public private(set) var streamingMessageID: String?
     /// Rich local timelines by durable session id, so switching away and back
     /// restores folded tool/approval/clarify rows instead of downgrading to
     /// server text history. In-memory for this run only — persistence keeps

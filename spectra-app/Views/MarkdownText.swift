@@ -6,7 +6,10 @@ import SpectraCore
 /// links) is rendered natively by SwiftUI's AttributedString markdown.
 struct MarkdownText: View {
     let text: String
-    private var blocks: [Markdown.Block] { Markdown.blocks(text) }
+    // Parse once per distinct text (via .task(id:)), not on every body pass —
+    // sibling updates (new tool rows, other streaming) would otherwise reparse
+    // every rendered message each event.
+    @State private var blocks: [Markdown.Block] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -14,6 +17,7 @@ struct MarkdownText: View {
                 view(for: block)
             }
         }
+        .task(id: text) { blocks = Markdown.blocks(text) }
     }
 
     @ViewBuilder private func view(for block: Markdown.Block) -> some View {
