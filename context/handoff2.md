@@ -119,3 +119,59 @@ Unchanged from handoff.md, plus:
 - `ponytail:ponytail` (default here) — keep the laziest-that-works bar; the RPC
   paths deliberately have no mock seam, don't add one speculatively.
 - `run` — to launch/screenshot the app when validating UI changes.
+
+---
+
+## Session 3 addendum (Aug 27 2026, v1.7.5)
+
+Shipped on top of the above, all committed to local `main` (no git remote —
+everything lives on-device by choice):
+
+- **Profile switching** (`a4ecc2a`): "Switch profile" section in the Chat header
+  sheet (>1 profile) + "Open Chat" in profile detail. Confirmed working.
+- **§4 multi-attachment** (`fa66031`): `Message.attachment` → `attachments: [ ]`
+  (legacy singular still decodes); stage/remove several, send together.
+- **Friendlier Activity copy** (`a4ecc2a`): `ActivityItem.displayTitle`.
+- **Version tagging** (`df6d160`): `MARKETING_VERSION` → 1.7.5; Settings → About
+  already renders it. Bump this per release.
+
+### ⚠️ Chat streaming performance — a recurring freeze, now fixed (special note)
+
+Long streamed replies with interleaved tool calls froze the app. It was NOT one
+bug — it was **four** separate main-thread costs, fixed in sequence as the user
+re-hit the freeze from different angles. Any future chat-render change should
+respect these; they will re-introduce the freeze if regressed:
+
+1. `c1625f8` — `MarkdownText.blocks` was a computed property → the whole growing
+   message re-parsed every streamed token (O(n²)). The plain-text fast path was
+   gated on `status == .speaking`, which interleaved tool calls flip to
+   `.thinking` mid-stream, defeating it. Fix: gate on `message.id ==
+   streamingMessageID` (exposed read-only) — the live message renders as plain
+   text, no markdown until complete.
+2. `9fbb945` — `onChange(of: messages.last)` ran `Message`'s Equatable compare
+   (walks the whole growing string) every token = a second O(n²). Fix: key
+   follow-scroll on O(1) values (`messages.count`, `last?.text.count`).
+3. `11fc711` — follow-scroll fired a programmatic `scrollTo` per token, fighting
+   an in-progress drag (froze when scrolling during generation). Fix: throttle
+   to ~12/s via a reference-type timestamp (no view invalidation).
+4. `ae71e79` — scrolling a FINISHED thread still froze: each big message
+   re-parsed inline markdown (`AttributedString(markdown:)` per block) in the
+   view body every time a LazyVStack row scrolled back in, on main. Fix:
+   `RenderedBlock.render` (block + inline) runs on a detached task and is cached
+   (NSCache, 200 msgs); the body only lays out pre-parsed AttributedStrings.
+
+Invariant to preserve: **no markdown parsing on the main thread**, and the live
+streaming message renders plain (never through `MarkdownText`). Test both:
+(a) scroll up/down *during* a long generation, (b) scroll a *finished* long
+thread. User confirmed both smooth at v1.7.5.
+
+Deferred (not needed — freezes gone): coalescing delta tokens in `ProfileSession`
+so the UI updates ~20-30×/s instead of per-token. Reach for it only if the
+per-token full-`ChatView` re-render ever becomes the bottleneck again.
+
+### Still open
+- **Automated UI tests (handoff §1)** — `signIn` helper rewritten but UNVERIFIED
+  (ponytail-marked in `UITestSupport.swift`); session-switch / notification-tap /
+  composer UI tests still unwritten. User deprioritized.
+- **In-app "add profile"** — profiles are only choosable at onboarding; no
+  post-onboarding add UI. Offered, not taken.
