@@ -15,7 +15,7 @@ enum RenderedBlock: Equatable, Sendable {
     case rule
 
     /// Native inline markdown; preserves whitespace, degrades to plain on failure.
-    private static func inline(_ s: String) -> AttributedString {
+    nonisolated private static func inline(_ s: String) -> AttributedString {
         (try? AttributedString(
             markdown: s,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
@@ -23,7 +23,7 @@ enum RenderedBlock: Equatable, Sendable {
     }
 
     /// Pure, main-thread-free: block structure + inline parse for a whole message.
-    static func render(_ text: String) -> [RenderedBlock] {
+    nonisolated static func render(_ text: String) -> [RenderedBlock] {
         Markdown.blocks(text).map { block in
             switch block {
             case .paragraph(let s):        return .paragraph(inline(s))
