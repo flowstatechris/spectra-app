@@ -50,7 +50,7 @@ struct ActivityRow: View {
                         .font(Theme.mono(10))
                         .foregroundStyle(Theme.muted.opacity(0.7))
                 }
-                Text(item.toolName)
+                Text(item.displayTitle)
                     .font(Theme.serif(19))
                     .foregroundStyle(Theme.ink)
                 Text(item.context)

@@ -75,6 +75,7 @@ struct ProfilesView: View {
 }
 
 struct ProfileDetailView: View {
+    @Environment(AppState.self) private var app
     let session: ProfileSession
 
     var body: some View {
@@ -83,6 +84,9 @@ struct ProfileDetailView: View {
                 Text(session.profile.name)
                     .font(Theme.serif(40))
                     .foregroundStyle(Theme.ink)
+
+                Button("Open Chat") { app.routeToChat(profile: session.profile.name) }
+                    .buttonStyle(PrimaryButton())
 
                 field("Model", session.profile.model)
                 field("Provider", session.profile.provider)

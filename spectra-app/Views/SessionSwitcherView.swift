@@ -6,6 +6,7 @@ import SpectraCore
 /// picked one. Switching is blocked mid-turn / mid-approval so we never abandon a
 /// supervised runtime — listing stays available, only the actions disable.
 struct SessionSwitcherView: View {
+    @Environment(AppState.self) private var app
     let session: ProfileSession
     @Environment(\.dismiss) private var dismiss
 
@@ -18,6 +19,25 @@ struct SessionSwitcherView: View {
     var body: some View {
         NavigationStack {
             List {
+                if app.sessions.count > 1 {
+                    Section("Switch profile") {
+                        ForEach(app.sessions.keys.sorted(), id: \.self) { name in
+                            Button { app.activeProfileName = name; dismiss() } label: {
+                                HStack {
+                                    Text(name).font(Theme.mono(14, .medium)).foregroundStyle(Theme.ink)
+                                    if let a = app.sessions[name]?.attention {
+                                        Text(a.label).font(Theme.mono(10, .semibold)).foregroundStyle(Theme.danger)
+                                    }
+                                    Spacer()
+                                    if name == app.activeProfileName {
+                                        Text("active").font(Theme.mono(10, .semibold)).foregroundStyle(Theme.accent)
+                                    }
+                                }
+                            }
+                            .disabled(name == app.activeProfileName)
+                        }
+                    }
+                }
                 if !canSwitch {
                     Text("Finish the current turn before switching chats.")
                         .font(Theme.mono(12)).foregroundStyle(Theme.muted)
