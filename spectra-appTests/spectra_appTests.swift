@@ -78,6 +78,98 @@ struct ThreadItemsTests {
     @Test func emptyThreadProducesNoItems() {
         #expect(threadItems([]).isEmpty)
     }
+
+    // MARK: tool runs
+
+    /// The whole point: a turn that fires several tools is one collapsible
+    /// group, not one row per call.
+    @Test func groupsAdjacentToolRowsIntoOneRun() {
+        let items = threadItems([
+            Message(role: .user, text: "flights?"),
+            tool("skill_view"),
+            tool("soar_flights"),
+            tool("soar_flights_2"),
+        ])
+
+        #expect(items.count == 2)
+        guard case .toolRun(_, let activities, let live) = items[1] else {
+            Issue.record("expected the three tool rows to fold into one run")
+            return
+        }
+        #expect(activities.count == 3)
+        #expect(live == true)     // nothing after it → the turn is still going
+    }
+
+    /// Status narration and tool receipts fold in parallel, never into each
+    /// other — the model keeps them distinct and so does the thread.
+    @Test func statusAndToolRunsStaySeparate() {
+        let items = threadItems([
+            Message(role: .user, text: "flights?"),
+            status("Loading the flight skill"),
+            tool("skill_view"),
+            tool("soar_flights"),
+            status("Comparing fares"),
+        ])
+
+        #expect(items.count == 4)
+        guard case .statusRun(_, let opening, _) = items[1] else {
+            Issue.record("expected the opening narration to stay a status run")
+            return
+        }
+        #expect(opening.count == 1)
+        guard case .toolRun(_, let tools, let toolsLive) = items[2] else {
+            Issue.record("expected the two tools to fold between the narration")
+            return
+        }
+        #expect(tools.count == 2)
+        #expect(toolsLive == false)   // the later status line superseded it
+        guard case .statusRun(_, _, let closingLive) = items[3] else {
+            Issue.record("expected a trailing status run")
+            return
+        }
+        #expect(closingLive == true)
+    }
+
+    /// Any other kind closes both runs, so tools either side of an approval
+    /// don't collapse across it.
+    @Test func anApprovalBreaksASurroundingToolRun() {
+        let request = ApprovalRequest(sessionID: "s", payload: [
+            "request_id": "a1", "command": "rm -rf /", "choices": ["once", "deny"],
+        ])!
+        let items = threadItems([
+            Message(role: .user, text: "clean up"),
+            tool("read"),
+            Message(role: .agent, text: "", kind: .approval(ApprovalEvent(request: request))),
+            tool("write"),
+        ])
+
+        #expect(items.count == 4)
+        guard case .toolRun(_, let before, _) = items[1],
+              case .message = items[2],
+              case .toolRun(_, let after, _) = items[3] else {
+            Issue.record("expected the approval to split the tool rows into two runs")
+            return
+        }
+        #expect(before.count == 1)
+        #expect(after.count == 1)
+    }
+
+    /// Same composition guard as the status case: with the answer pinned last,
+    /// a finished turn's tool run is no longer trailing, so it settles.
+    @Test func pinnedAnswerLeavesNoLiveToolRun() {
+        let items = threadItems([
+            Message(role: .user, text: "flights?"),
+            plain("Here are your flights."),
+            tool("soar_flights"),
+        ])
+
+        #expect(items.count == 3)
+        guard case .toolRun(_, _, let live) = items[1] else {
+            Issue.record("expected the tool run above the pinned answer")
+            return
+        }
+        #expect(live == false)
+    }
 }
 
 private func tool(_ name: String) -> Message {

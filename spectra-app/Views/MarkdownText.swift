@@ -13,6 +13,9 @@ enum RenderedBlock: Equatable, Sendable {
     case code(language: String?, code: String)
     case quote(AttributedString)
     case rule
+    case table(headers: [AttributedString],
+               alignments: [Markdown.TableAlignment],
+               rows: [[AttributedString]])
 
     /// Native inline markdown; preserves whitespace, degrades to plain on failure.
     nonisolated private static func inline(_ s: String) -> AttributedString {
@@ -33,6 +36,10 @@ enum RenderedBlock: Equatable, Sendable {
             case .code(let lang, let code):return .code(language: lang, code: code)
             case .quote(let s):            return .quote(inline(s))
             case .rule:                    return .rule
+            case .table(let headers, let alignments, let rows):
+                return .table(headers: headers.map(inline),
+                              alignments: alignments,
+                              rows: rows.map { $0.map(inline) })
             }
         }
     }
@@ -110,6 +117,9 @@ struct MarkdownText: View {
 
         case .rule:
             Hairline().padding(.vertical, 2)
+
+        case .table(let headers, let alignments, let rows):
+            MarkdownTable(headers: headers, alignments: alignments, rows: rows)
         }
     }
 
@@ -123,6 +133,58 @@ struct MarkdownText: View {
 
     private func headingSize(_ level: Int) -> CGFloat {
         switch level { case 1: return 22; case 2: return 19; case 3: return 17; default: return 15 }
+    }
+}
+
+/// A GFM table as a real grid. Kept as a grid rather than the card-per-row
+/// treatment a records list would use: the columns here are whatever the agent
+/// emitted, so there is no domain shape to reformat them into. Wide tables
+/// scroll horizontally inside their own card — the same containment CodeBlock
+/// uses — so the thread itself never scrolls sideways.
+private struct MarkdownTable: View {
+    let headers: [AttributedString]
+    let alignments: [Markdown.TableAlignment]
+    let rows: [[AttributedString]]
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            Grid(alignment: .topLeading, horizontalSpacing: 18, verticalSpacing: 7) {
+                GridRow {
+                    ForEach(Array(headers.enumerated()), id: \.offset) { column, cell in
+                        Text(cell)
+                            .font(Theme.mono(12.5, .semibold))
+                            .foregroundStyle(Theme.ink)
+                            .gridColumnAlignment(alignment(column))
+                    }
+                }
+                Divider().overlay(Theme.hairline)
+                    .gridCellColumns(max(headers.count, 1))
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    GridRow {
+                        ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
+                            Text(cell)
+                                .font(Theme.mono(12.5, .regular))
+                                .foregroundStyle(Theme.ink)
+                        }
+                    }
+                }
+            }
+            .textSelection(.enabled)
+            .padding(12)
+        }
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+            .strokeBorder(Theme.hairline, lineWidth: 1))
+    }
+
+    /// Column alignment from the separator row, defaulting to leading for a
+    /// ragged table the parser padded out.
+    private func alignment(_ column: Int) -> HorizontalAlignment {
+        switch alignments.indices.contains(column) ? alignments[column] : .leading {
+        case .leading:  return .leading
+        case .center:   return .center
+        case .trailing: return .trailing
+        }
     }
 }
 

@@ -6,9 +6,12 @@ import Foundation
 /// block's string and handled natively at render time.
 ///
 /// Covers the 90% agents actually emit: headings, bullet/numbered lists, fenced
-/// code, blockquotes, rules, paragraphs. Tables / nested lists degrade to
-/// paragraphs (ponytail: add if agents start leaning on them).
+/// code, blockquotes, rules, GFM pipe tables, paragraphs. Nested lists degrade
+/// to paragraphs (ponytail: add if agents start leaning on them).
 public enum Markdown {
+    /// Per-column alignment from a table's `:---:` separator row.
+    public enum TableAlignment: Equatable, Sendable { case leading, center, trailing }
+
     public enum Block: Equatable, Sendable {
         case paragraph(String)
         case heading(level: Int, text: String)
@@ -17,6 +20,9 @@ public enum Markdown {
         case code(language: String?, code: String)
         case quote(String)
         case rule
+        /// GFM pipe table. `alignments` holds one entry per column; every data
+        /// row is padded or truncated to the header's column count.
+        case table(headers: [String], alignments: [TableAlignment], rows: [[String]])
     }
 
     public static func blocks(_ text: String) -> [Block] {
@@ -95,6 +101,15 @@ public enum Markdown {
                 out.append(.quote(quoted.joined(separator: "\n"))); continue
             }
 
+            // A pipe table, but only when the separator row confirms it — an
+            // ordinary sentence containing a pipe has to stay prose.
+            if let (block, consumed) = parseTable(lines, at: i) {
+                flushParagraph(&para)
+                out.append(block)
+                i += consumed
+                continue
+            }
+
             para.append(line); i += 1
         }
         flushParagraph(&para)
@@ -123,5 +138,78 @@ public enum Markdown {
         let sep = t[t.index(t.startIndex, offsetBy: digits + 1)]
         guard (after == "." || after == ")"), sep == " " else { return nil }
         return digits + 2
+    }
+
+    // MARK: Tables
+
+    /// A GFM pipe table starting at `start`: a header row, a separator row, then
+    /// data rows until the first line without a pipe. Returns the block and how
+    /// many lines it consumed, or nil if this isn't a table.
+    ///
+    /// The separator is what makes it a table — without that requirement any
+    /// prose line containing a `|` would open one.
+    private static func parseTable(_ lines: [String], at start: Int) -> (Block, Int)? {
+        guard start + 1 < lines.count, lines[start].contains("|"),
+              let alignments = separatorRow(lines[start + 1]) else { return nil }
+        let headers = cells(lines[start])
+        guard headers.count == alignments.count else { return nil }
+
+        var rows: [[String]] = []
+        var i = start + 2
+        while i < lines.count, lines[i].contains("|") {
+            var row = cells(lines[i])
+            if row.count < headers.count {
+                row += Array(repeating: "", count: headers.count - row.count)
+            }
+            rows.append(Array(row.prefix(headers.count)))
+            i += 1
+        }
+        return (.table(headers: headers, alignments: alignments, rows: rows), i - start)
+    }
+
+    /// One alignment per column if every cell is a `---` / `:--` / `--:` / `:-:`
+    /// run, else nil (meaning the line above it wasn't a table header).
+    private static func separatorRow(_ line: String) -> [TableAlignment]? {
+        let parts = cells(line)
+        guard !parts.isEmpty else { return nil }
+        var out: [TableAlignment] = []
+        for part in parts {
+            guard part.contains("-"),
+                  part.allSatisfy({ $0 == "-" || $0 == ":" }) else { return nil }
+            switch (part.hasPrefix(":"), part.hasSuffix(":")) {
+            case (true, true):  out.append(.center)
+            case (false, true): out.append(.trailing)
+            default:            out.append(.leading)
+            }
+        }
+        return out
+    }
+
+    /// Split a pipe row into trimmed cells. The outer pipes are optional (GFM
+    /// allows `a | b` as well as `| a | b |`), and `\|` is a literal pipe.
+    private static func cells(_ line: String) -> [String] {
+        var out: [String] = []
+        var cell = ""
+        var escaped = false
+        for c in line.trimmingCharacters(in: .whitespaces) {
+            if escaped {
+                if c != "|" { cell.append("\\") }   // only `\|` is an escape
+                cell.append(c)
+                escaped = false
+            } else if c == "\\" {
+                escaped = true
+            } else if c == "|" {
+                out.append(cell.trimmingCharacters(in: .whitespaces))
+                cell = ""
+            } else {
+                cell.append(c)
+            }
+        }
+        if escaped { cell.append("\\") }
+        out.append(cell.trimmingCharacters(in: .whitespaces))
+        // The optional outer pipes leave an empty cell at each end.
+        if out.count > 1, out.first == "" { out.removeFirst() }
+        if out.count > 1, out.last == "" { out.removeLast() }
+        return out
     }
 }

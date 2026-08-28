@@ -192,6 +192,15 @@ struct ChatView: View {
                             StatusRunRow(lines: lines, live: live)
                                 .id(id)
                                 .transition(.opacity)
+                        case .toolRun(let id, let activities, let live):
+                            // A run is only "live" while the turn actually is:
+                            // a turn that ends on tools with no closing answer
+                            // would otherwise shimmer forever.
+                            ToolRunRow(activities: activities,
+                                       live: live && session.isRunning,
+                                       statusLabel: statusLabel)
+                                .id(id)
+                                .transition(.opacity)
                         }
                     }
                     if awaitingFirstOutput(session) {
@@ -533,11 +542,13 @@ private struct UserAttachmentBubble: View {
 enum ThreadItem: Identifiable {
     case message(SpectraCore.Message)
     case statusRun(id: String, lines: [SpectraCore.Message], live: Bool)
+    case toolRun(id: String, activities: [SpectraCore.Message], live: Bool)
 
     var id: String {
         switch self {
         case .message(let m): return m.id
         case .statusRun(let id, _, _): return "run:\(id)"
+        case .toolRun(let id, _, _): return "tools:\(id)"
         }
     }
 }
@@ -577,10 +588,14 @@ func pinAnswersToTurnEnd(_ messages: [SpectraCore.Message]) -> [SpectraCore.Mess
     return out
 }
 
-/// Thread rows, with consecutive `.status` lines folded into one run. The
-/// trailing run is "live" (its last line shimmers); any run something newer has
-/// superseded collapses to a single expandable summary, so a long tool-heavy
-/// turn doesn't bury the answer under its own narration.
+/// Thread rows, with consecutive `.status` lines folded into one run and
+/// consecutive `.toolActivity` rows folded into another. The trailing run is
+/// "live"; anything newer supersedes a run and collapses it behind a summary,
+/// so a long tool-heavy turn doesn't bury the answer under its own narration.
+///
+/// The two kinds fold in parallel rather than merging: status narration and
+/// tool receipts stay distinct the way the model keeps them, and a message of
+/// any other kind closes both.
 ///
 /// ponytail: recomputed on every body pass, so it re-walks the message array
 /// once per streamed token — O(messages), not O(text), and SwiftUI already
@@ -588,21 +603,38 @@ func pinAnswersToTurnEnd(_ messages: [SpectraCore.Message]) -> [SpectraCore.Mess
 /// it keyed on `messages.count` rather than making it incremental.
 func threadItems(_ messages: [SpectraCore.Message]) -> [ThreadItem] {
     var items: [ThreadItem] = []
-    var run: [SpectraCore.Message] = []
-    func flush(live: Bool) {
-        guard let first = run.first else { return }
-        items.append(.statusRun(id: first.id, lines: run, live: live))
-        run = []
+    var status: [SpectraCore.Message] = []
+    var tools: [SpectraCore.Message] = []
+
+    func flushStatus(live: Bool) {
+        guard let first = status.first else { return }
+        items.append(.statusRun(id: first.id, lines: status, live: live))
+        status = []
     }
+    func flushTools(live: Bool) {
+        guard let first = tools.first else { return }
+        items.append(.toolRun(id: first.id, activities: tools, live: live))
+        tools = []
+    }
+
     for message in pinAnswersToTurnEnd(messages) {
-        if case .status = message.kind {
-            run.append(message)
-        } else {
-            flush(live: false)
+        switch message.kind {
+        case .status:
+            flushTools(live: false)
+            status.append(message)
+        case .toolActivity:
+            flushStatus(live: false)
+            tools.append(message)
+        default:
+            flushStatus(live: false)
+            flushTools(live: false)
             items.append(.message(message))
         }
     }
-    flush(live: true)   // trailing run has nothing after it → live
+    // Only one buffer can still be open — appending to either flushes the
+    // other — so whichever it is, nothing followed it: it's live.
+    flushStatus(live: true)
+    flushTools(live: true)
     return items
 }
 
@@ -677,6 +709,103 @@ private struct StatusRunRow: View {
     }
 }
 
+/// A run of consecutive tool rows behind one header.
+///
+/// Unlike `StatusRunRow` this collapses even while live. Status narration reads
+/// fine streaming in, but a turn that fires six near-identical tool calls is a
+/// wall of rows either way — and the complaint that prompted this was about
+/// rows that had *already* succeeded, so deferring the fold until the run is
+/// superseded would not have fixed it.
+///
+/// While live the header is the same `statusLabel` the pre-first-token
+/// placeholder and the streaming row show, so this reads as that status line
+/// continuing rather than a second, differently-worded one appearing under it.
+private struct ToolRunRow: View {
+    let activities: [SpectraCore.Message]
+    let live: Bool
+    let statusLabel: String
+    @State private var expanded = false
+
+    var body: some View {
+        // ponytail: one settled tool isn't worth a disclosure control — its own
+        // row already says more than "Ran 1 tool" would.
+        if tools.count == 1 && !live {
+            rows
+        } else {
+            VStack(alignment: .leading, spacing: expanded ? 2 : 0) {
+                header
+                if expanded {
+                    rows
+                        .padding(.leading, 14)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+        }
+    }
+
+    private var header: some View {
+        Button { withAnimation(.snappy) { expanded.toggle() } } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 9) {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(tint)
+                    .frame(width: 14)
+                if live {
+                    // .shimmering owns the colour — no foregroundStyle here.
+                    Text("\(statusLabel)…").font(Theme.mono(12, .medium)).shimmering()
+                } else {
+                    Text(summary).font(Theme.mono(12, .medium)).foregroundStyle(Theme.muted)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Theme.muted.opacity(0.65))
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(.vertical, 7)
+        .accessibilityLabel(live ? statusLabel : summary)
+        .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+        .accessibilityHint("Double tap to \(expanded ? "collapse" : "show the tools that ran")")
+    }
+
+    private var rows: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(activities) { message in
+                if case .toolActivity(let activity) = message.kind {
+                    ToolActivityRow(activity: activity)
+                }
+            }
+        }
+    }
+
+    private var tools: [ToolActivity] {
+        activities.compactMap {
+            if case .toolActivity(let activity) = $0.kind { return activity }
+            return nil
+        }
+    }
+
+    /// A generic rollup, not the last tool's title: the same call repeated
+    /// three times is the common shape, and naming it once says nothing.
+    private var summary: String {
+        let base = "Ran \(tools.count) tool\(tools.count == 1 ? "" : "s")"
+        let durations = tools.compactMap(\.duration)
+        guard !durations.isEmpty, durations.count == tools.count else { return base }
+        return base + String(format: " · %.1fs", durations.reduce(0, +))
+    }
+
+    private var icon: String {
+        if live { return "chevron.right" }
+        return tools.contains { $0.status == .failed } ? "xmark" : "checkmark"
+    }
+
+    private var tint: Color {
+        if live { return Theme.muted }
+        return tools.contains { $0.status == .failed } ? Theme.danger : Theme.ok
+    }
+}
+
 struct MessageRow: View {
     let message: SpectraCore.Message
     let session: ProfileSession
@@ -692,6 +821,8 @@ struct MessageRow: View {
     var body: some View {
         switch message.kind {
         case .toolActivity(let activity):
+            // Grouped into ToolRunRow by `threadItems`; this is the fallback
+            // for a tool row rendered outside a run.
             ToolActivityRow(activity: activity)
 
         case .status:
@@ -1061,7 +1192,9 @@ struct ApprovalCard: View {
                             if !resolved { isSubmitting = false }
                         }
                     }
-                        .buttonStyle(OutlineButton(tint: choice == "deny" ? Theme.danger : Theme.accent))
+                        .buttonStyle(OutlineButton(
+                            tint: choice == "deny" ? Theme.danger : Theme.accent,
+                            filled: choice == defaultChoice))
                         .disabled(isSubmitting)
                 }
             }
@@ -1080,6 +1213,11 @@ struct ApprovalCard: View {
         .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 
+    /// The narrowest affirmative the server offered — filled, so the grid has
+    /// something to land on. Never "deny": a destructive default is a misfire
+    /// waiting to happen.
+    private var defaultChoice: String? { approval.choices.first { $0 != "deny" } }
+
     private func choiceLabel(_ choice: String) -> String {
         switch choice {
         case "once": return "Allow once"
@@ -1091,80 +1229,49 @@ struct ApprovalCard: View {
     }
 }
 
-/// Soft clarify (spec §8): choice rows or free text; ignorable.
+/// Soft clarify (spec §8): one question at a time — a step counter, prev/next
+/// arrows, choice rows and a free-text field. Ignorable; the thread stays live.
+///
+/// Each answer goes out on its own `clarify.respond` the moment it is given
+/// (the wire's batched `answers` dict is for reconnect replay, not this path),
+/// so paging back and forth can never strand one. Once the server reports no
+/// questions remaining, `clarificationRow` swaps this card for a receipt — so
+/// this view only ever renders the pending state.
 struct ClarifyCard: View {
     let event: ClarificationEvent
     let session: ProfileSession
+
+    @State private var qi: Int
     @State private var freeText: [String: String] = [:]
     @State private var selections: [String: Set<String>] = [:]
     @State private var submitting: Set<String> = []
 
-    private var clarify: ClarifyRequest { event.request }
+    init(event: ClarificationEvent, session: ProfileSession) {
+        self.event = event
+        self.session = session
+        // Open on the first question still unanswered. On a reconnect replay
+        // `answers` arrives partly filled, and making someone page past their
+        // own answers to reach the live question is a wasted tap.
+        _qi = State(initialValue:
+            event.request.questions.firstIndex { event.answers[$0.id] == nil } ?? 0)
+    }
+
+    private var questions: [ClarifyRequest.Question] { event.request.questions }
+    private var question: ClarifyRequest.Question? {
+        questions.indices.contains(qi) ? questions[qi] : nil
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Eyebrow("Clarify", color: Theme.accent)
-            ForEach(clarify.questions) { q in
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(q.question)
-                        .font(Theme.serif(17))
-                        .foregroundStyle(Theme.ink)
-                    if let answer = event.answers[q.id] {
-                        Label(answer, systemImage: "checkmark.circle.fill")
-                            .font(Theme.mono(12)).foregroundStyle(Theme.ok)
-                    } else if q.choices.isEmpty {
-                        HStack(spacing: 10) {
-                            TextField("", text: textBinding(for: q.id), prompt:
-                                Text("Answer…").foregroundStyle(Theme.muted))
-                                .font(Theme.mono(14))
-                                .padding(.vertical, 9).padding(.horizontal, 12)
-                                .background(Theme.plate, in: Capsule())
-                            Button("Send") {
-                                submit(q, answer: freeText[q.id, default: ""])
-                            }
-                            .buttonStyle(OutlineButton(tint: Theme.accent))
-                            .disabled(freeText[q.id, default: ""].isEmpty || submitting.contains(q.id))
-                        }
-                    } else {
-                        VStack(spacing: 8) {
-                            ForEach(q.choices, id: \.self) { choice in
-                                Button {
-                                    if q.multiSelect {
-                                        toggle(choice, for: q.id)
-                                    } else {
-                                        submit(q, answer: choice)
-                                    }
-                                } label: {
-                                    HStack {
-                                        Text(choice).font(Theme.mono(13)).foregroundStyle(Theme.ink)
-                                        Spacer()
-                                        Image(systemName: q.multiSelect
-                                              ? (selections[q.id, default: []].contains(choice)
-                                                 ? "checkmark.square.fill" : "square")
-                                              : "arrow.up.right")
-                                            .font(.caption).foregroundStyle(q.multiSelect ? Theme.accent : Theme.muted)
-                                            .accessibilityHidden(true)
-                                    }
-                                    .padding(.vertical, 11).padding(.horizontal, 14)
-                                    .background(Theme.plate, in: RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
-                                }
-                                .buttonStyle(.plain)
-                                .disabled(submitting.contains(q.id))
-                            }
-                            if q.multiSelect {
-                                Button("Send selections") {
-                                    let selected = q.choices.filter {
-                                        selections[q.id, default: []].contains($0)
-                                    }
-                                    let data = try? JSONEncoder().encode(selected)
-                                    submit(q, answer: data.flatMap { String(data: $0, encoding: .utf8) } ?? "")
-                                }
-                                .buttonStyle(OutlineButton(tint: Theme.accent))
-                                .disabled(selections[q.id, default: []].isEmpty || submitting.contains(q.id))
-                            }
-                        }
-                    }
-                }
+            HStack {
+                Eyebrow("Clarify", color: Theme.accent)
+                Spacer()
+                if questions.count > 1 { stepper }
+            }
+            if let question {
+                questionView(question)
+                    .id(question.id.isEmpty ? "q\(qi)" : question.id)
+                    .transition(.opacity)
             }
             if !submitting.isEmpty {
                 HStack(spacing: 7) {
@@ -1177,15 +1284,128 @@ struct ClarifyCard: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: Radius.xl, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Radius.xl, style: .continuous)
             .strokeBorder(Theme.hairline, lineWidth: 1))
+        .animation(.snappy, value: qi)
         .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 
-    private func textBinding(for id: String) -> Binding<String> {
-        Binding(get: { freeText[id, default: ""] }, set: { freeText[id] = $0 })
+    // MARK: stepper
+
+    private var stepper: some View {
+        HStack(spacing: 8) {
+            stepArrow("chevron.up", disabled: qi <= 0) { go(to: qi - 1) }
+            Text("\(qi + 1) / \(questions.count)")
+                .font(Theme.mono(11))
+                .monospacedDigit()
+                .foregroundStyle(Theme.muted)
+                .contentTransition(.numericText(value: Double(qi)))
+            stepArrow("chevron.down", disabled: qi >= questions.count - 1) { go(to: qi + 1) }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Question \(qi + 1) of \(questions.count)")
+    }
+
+    private func stepArrow(_ system: String, disabled: Bool,
+                           action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: system)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.muted)
+                .frame(width: 28, height: 28)
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.3 : 1)
+        .accessibilityLabel(system == "chevron.up" ? "Previous question" : "Next question")
+    }
+
+    // MARK: one question
+
+    @ViewBuilder private func questionView(_ q: ClarifyRequest.Question) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(q.question)
+                .font(Theme.serif(17))
+                .foregroundStyle(Theme.ink)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let answer = event.answers[q.id] {
+                Label(answer, systemImage: "checkmark.circle.fill")
+                    .font(Theme.mono(12)).foregroundStyle(Theme.ok)
+            } else {
+                if !q.choices.isEmpty {
+                    VStack(spacing: 8) {
+                        ForEach(q.choices, id: \.self) { choiceRow(q, $0) }
+                    }
+                    if q.multiSelect {
+                        Button("Send selections") { sendSelections(q) }
+                            .buttonStyle(OutlineButton(tint: Theme.accent))
+                            .disabled(selections[q.id, default: []].isEmpty
+                                      || submitting.contains(q.id))
+                    }
+                }
+                // Always offered, even alongside choices — the desktop client
+                // lets you answer something the agent didn't think to list.
+                customField(q)
+            }
+        }
+    }
+
+    private func choiceRow(_ q: ClarifyRequest.Question, _ choice: String) -> some View {
+        let picked = selections[q.id, default: []].contains(choice)
+        return Button {
+            if q.multiSelect { toggle(choice, for: q.id) } else { submit(q, answer: choice) }
+        } label: {
+            HStack {
+                Text(choice).font(Theme.mono(13)).foregroundStyle(Theme.ink)
+                Spacer()
+                Image(systemName: q.multiSelect
+                      ? (picked ? "checkmark.square.fill" : "square")
+                      : "arrow.up.right")
+                    .font(.caption)
+                    .foregroundStyle(q.multiSelect ? Theme.accent : Theme.muted)
+                    .accessibilityHidden(true)
+            }
+            .padding(.vertical, 11).padding(.horizontal, 14)
+            .background(Theme.plate, in: RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(submitting.contains(q.id))
+    }
+
+    private func customField(_ q: ClarifyRequest.Question) -> some View {
+        HStack(spacing: 10) {
+            TextField("", text: textBinding(for: q), prompt:
+                Text(q.choices.isEmpty ? "Answer…" : "Something else…")
+                    .foregroundStyle(Theme.muted))
+                .font(Theme.mono(14))
+                .padding(.vertical, 9).padding(.horizontal, 12)
+                .background(Theme.plate, in: Capsule())
+                .submitLabel(.send)
+                .onSubmit { submitCustom(q) }
+            Button("Send") { submitCustom(q) }
+                .buttonStyle(OutlineButton(tint: Theme.accent))
+                .disabled(typed(q).isEmpty || submitting.contains(q.id))
+        }
+    }
+
+    // MARK: state
+
+    private func typed(_ q: ClarifyRequest.Question) -> String {
+        freeText[q.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func textBinding(for q: ClarifyRequest.Question) -> Binding<String> {
+        Binding(get: { freeText[q.id, default: ""] },
+                // Typing overrides rather than adds: one answer per question
+                // goes to the server, so a stale tapped choice can't linger.
+                set: { new in
+                    freeText[q.id] = new
+                    if !new.isEmpty { selections[q.id] = [] }
+                })
     }
 
     private func toggle(_ choice: String, for id: String) {
         Cuelume.shared.play(.press)
+        freeText[id] = ""          // the other half of that mutual exclusion
         if selections[id, default: []].contains(choice) {
             selections[id]?.remove(choice)
         } else {
@@ -1193,12 +1413,42 @@ struct ClarifyCard: View {
         }
     }
 
+    private func go(to index: Int) {
+        withAnimation(.snappy) { qi = min(max(index, 0), questions.count - 1) }
+    }
+
+    /// Forward to the next question that still needs an answer, if any. Stays
+    /// put on the last one — the card is about to be replaced by its receipt.
+    private func advance() {
+        guard let next = questions.indices.first(where: {
+            $0 > qi && event.answers[questions[$0].id] == nil
+        }) else { return }
+        go(to: next)
+    }
+
+    // MARK: submit
+
+    private func submitCustom(_ q: ClarifyRequest.Question) {
+        let text = typed(q)
+        guard !text.isEmpty else { return }
+        submit(q, answer: text)
+    }
+
+    private func sendSelections(_ q: ClarifyRequest.Question) {
+        let selected = q.choices.filter { selections[q.id, default: []].contains($0) }
+        let data = try? JSONEncoder().encode(selected)
+        submit(q, answer: data.flatMap { String(data: $0, encoding: .utf8) } ?? "")
+    }
+
     private func submit(_ question: ClarifyRequest.Question, answer: String) {
         Cuelume.shared.play(.press)
         submitting.insert(question.id)
         Task {
             let accepted = await session.answerClarify(questionID: question.id, answer: answer)
-            if !accepted { submitting.remove(question.id) }
+            // Cleared either way now that the card outlives a single answer —
+            // otherwise the spinner would sit there for the rest of the stack.
+            submitting.remove(question.id)
+            if accepted { advance() }
         }
     }
 }

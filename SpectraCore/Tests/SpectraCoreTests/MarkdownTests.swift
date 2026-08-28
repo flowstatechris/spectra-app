@@ -52,6 +52,62 @@ final class MarkdownTests: XCTestCase {
         ])
     }
 
+    // MARK: Tables
+
+    func testTable() {
+        let md = "| Flight | Price |\n|---|---|\n| CX 811 | $8,602 |\n| JL 7 | $9,140 |"
+        XCTAssertEqual(Markdown.blocks(md), [
+            .table(headers: ["Flight", "Price"],
+                   alignments: [.leading, .leading],
+                   rows: [["CX 811", "$8,602"], ["JL 7", "$9,140"]]),
+        ])
+    }
+
+    func testTableAlignments() {
+        let md = "| L | C | R |\n| :-- | :-: | --: |\n| 1 | 2 | 3 |"
+        XCTAssertEqual(Markdown.blocks(md), [
+            .table(headers: ["L", "C", "R"],
+                   alignments: [.leading, .center, .trailing],
+                   rows: [["1", "2", "3"]]),
+        ])
+    }
+
+    func testTableWithoutOuterPipes() {
+        XCTAssertEqual(Markdown.blocks("a | b\n--- | ---\n1 | 2"),
+                       [.table(headers: ["a", "b"],
+                               alignments: [.leading, .leading],
+                               rows: [["1", "2"]])])
+    }
+
+    // The separator row is what makes it a table; prose with a pipe stays prose.
+    func testPipeLineWithoutSeparatorStaysParagraph() {
+        XCTAssertEqual(Markdown.blocks("use a | b to pipe\nand more text"),
+                       [.paragraph("use a | b to pipe\nand more text")])
+    }
+
+    func testRaggedRowsPadAndTruncateToHeaderWidth() {
+        let md = "| a | b | c |\n|---|---|---|\n| 1 |\n| 1 | 2 | 3 | 4 |"
+        XCTAssertEqual(Markdown.blocks(md), [
+            .table(headers: ["a", "b", "c"],
+                   alignments: [.leading, .leading, .leading],
+                   rows: [["1", "", ""], ["1", "2", "3"]]),
+        ])
+    }
+
+    func testEscapedPipeIsALiteralCellCharacter() {
+        XCTAssertEqual(Markdown.blocks("| cmd |\n|---|\n| a \\| b |"),
+                       [.table(headers: ["cmd"], alignments: [.leading],
+                               rows: [["a | b"]])])
+    }
+
+    func testTableEndsAtBlankLineAndProseFollows() {
+        let md = "| a |\n|---|\n| 1 |\n\nafter"
+        XCTAssertEqual(Markdown.blocks(md), [
+            .table(headers: ["a"], alignments: [.leading], rows: [["1"]]),
+            .paragraph("after"),
+        ])
+    }
+
     func testUnclosedFenceToEOF() {
         XCTAssertEqual(Markdown.blocks("```\nx\ny"),
                        [.code(language: nil, code: "x\ny")])

@@ -118,15 +118,20 @@ struct PrimaryButton: ButtonStyle {
     }
 }
 
-/// Hairline-outline secondary pill.
+/// Hairline-outline secondary pill. `filled` inverts it to a solid tint — for
+/// the one action in a group of equals that should read as the default.
 struct OutlineButton: ButtonStyle {
     var tint: Color = Theme.ink
+    var filled = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(Theme.mono(13, .medium))
-            .foregroundStyle(tint)
+            .foregroundStyle(filled ? Theme.paper : tint)
             .padding(.vertical, 11).padding(.horizontal, 16)
-            .background(Capsule().strokeBorder(tint.opacity(0.4), lineWidth: 1))
+            .background {
+                if filled { Capsule().fill(tint) }
+                else { Capsule().strokeBorder(tint.opacity(0.4), lineWidth: 1) }
+            }
             .opacity(configuration.isPressed ? 0.6 : 1)
     }
 }
