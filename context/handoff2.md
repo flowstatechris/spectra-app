@@ -84,10 +84,10 @@ presented auth UI, so the Activity deep-link test fails before asserting.
 Rewrite it, then add UI tests for: session switch (list/new/resume), the
 notification-tap route, and composer multiline + Stop.
 
-### 2. On-device composer/camera checks (§3 in handoff.md)
-Simulator can't validate the camera. Cover auth/capture/preview/remove/send,
-Photo Library + Files cancel paths, a real `file.attach` + read, large-file RPC
-errors.
+### 2. On-device composer/camera checks (§3 in handoff.md) — DONE (manual)
+Validated by hand on-device Aug 27 2026: camera and Files both work
+(capture/preview/send + file attach). Not automated (needs a physical device;
+sim can't drive the camera), but no longer an open risk.
 
 ### 3. Rich-history reconciliation (deferred from §2)
 When it matters: keep the local ToolActivity/Approval/Clarify timeline keyed by
