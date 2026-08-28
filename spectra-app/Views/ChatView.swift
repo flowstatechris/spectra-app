@@ -16,6 +16,7 @@ struct ChatView: View {
     @State private var stopping = false
     @State private var scrolledIntoConversation = false
     @State private var isPinnedToBottom = true   // auto-follow only while at bottom
+    @State private var followThrottle = FollowThrottle()   // rate-limit streaming auto-scroll
     @State private var showingInitialHeader = true
     @State private var showingStatusTransition = false
     @State private var collapsedApprovalID: String?
@@ -181,7 +182,10 @@ struct ChatView: View {
                 if let id = session.messages.last?.id { proxy.scrollTo(id, anchor: .bottom) }
             }
             .onChange(of: session.messages.last?.text.count) {
-                guard isPinnedToBottom else { return }
+                // Streaming growth: follow at most ~12x/s. Per-token scrollTo
+                // storms the main thread and fights an in-progress drag (the
+                // scroll-up-and-down-while-generating freeze).
+                guard isPinnedToBottom, followThrottle.ready(minInterval: 0.08) else { return }
                 if let id = session.messages.last?.id { proxy.scrollTo(id, anchor: .bottom) }
             }
             .onAppear { scrollToActivity(in: session, proxy: proxy) }
@@ -1110,5 +1114,17 @@ private extension UIImage {
             draw(in: CGRect(origin: .zero, size: target))
         }
         return out.jpegData(compressionQuality: quality) ?? Data()
+    }
+}
+
+/// Wall-clock rate limiter for streaming auto-scroll. A reference type so
+/// updating the timestamp doesn't invalidate the SwiftUI view that holds it.
+private final class FollowThrottle {
+    private var last = Date.distantPast
+    func ready(minInterval: TimeInterval) -> Bool {
+        let now = Date()
+        guard now.timeIntervalSince(last) >= minInterval else { return false }
+        last = now
+        return true
     }
 }

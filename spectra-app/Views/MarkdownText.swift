@@ -17,7 +17,9 @@ struct MarkdownText: View {
                 view(for: block)
             }
         }
-        .task(id: text) { blocks = Markdown.blocks(text) }
+        // Parse off the main thread — a completed row scrolling into view
+        // during an active stream must not block the main actor on a big parse.
+        .task(id: text) { blocks = await Task.detached { Markdown.blocks(text) }.value }
     }
 
     @ViewBuilder private func view(for block: Markdown.Block) -> some View {
