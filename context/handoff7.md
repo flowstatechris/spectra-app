@@ -83,13 +83,28 @@ backgrounded; the old `play()` restarted it and called
 exactly the crash pattern, hit reliably by a notification tap resuming
 straight into a cue-playing event.
 
-**Fixed** (commit `8ce97cc`): `play()` now skips the cue instead of playing
-into the race when it has to (re)start a stopped engine — engine is warm
-for every call after. Minor tradeoff: the very first cue after a cold
-resume is silently dropped. New `CuelumeTests.swift` (2 tests) reproduces
-the precondition via test-only hooks; confirmed red against the old logic,
-green against the fix. Full SpectraCore suite (58 tests) and the iOS
-simulator build both pass.
+**First fix attempt (`8ce97cc`) was insufficient — same crash recurred.**
+It gated `play()` on `engine.isRunning`, assuming false meant "cold, skip."
+Wrong: iOS can leave `engine.isRunning` reporting **true** across a
+background→foreground cycle even though the real hardware IO was torn
+down while suspended — nothing was listening for that, so the flag never
+got corrected, the guard's condition never fired, and `node.play()` hit
+the same crash again on the same line.
+
+**Real fix (`03154fd`):** stopped trusting `engine.isRunning` for this
+entirely. Added an explicit `isWarm` flag, set true only by a one-shot
+`installTap` confirming a genuine CoreAudio render callback actually
+happened — the one true signal `play()` is safe. `isWarm` is explicitly
+invalidated on `UIApplication.didEnterBackgroundNotification` (so
+foreground can't rely on stale state) and re-confirmed on
+`willEnterForegroundNotification`, plus play()'s own lazy kick if called
+cold. `CuelumeTests.swift` now forces the exact scenario that broke fix
+#1 (cold `isWarm` while `engine.isRunning` stays true throughout) and
+confirms `play()` still skips correctly. Full suite (58 tests) green;
+confirmed via `nm` that the iOS build actually contains the new symbols
+rather than trusting build success alone (learned that lesson from fix #1
+apparently not landing, or not actually being what crashed — either way,
+verify the binary, not just the build exit code).
 
 ## What was NOT done — validate this next
 
