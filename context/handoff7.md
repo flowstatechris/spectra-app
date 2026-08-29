@@ -91,20 +91,46 @@ down while suspended — nothing was listening for that, so the flag never
 got corrected, the guard's condition never fired, and `node.play()` hit
 the same crash again on the same line.
 
-**Real fix (`03154fd`):** stopped trusting `engine.isRunning` for this
-entirely. Added an explicit `isWarm` flag, set true only by a one-shot
-`installTap` confirming a genuine CoreAudio render callback actually
-happened — the one true signal `play()` is safe. `isWarm` is explicitly
-invalidated on `UIApplication.didEnterBackgroundNotification` (so
-foreground can't rely on stale state) and re-confirmed on
-`willEnterForegroundNotification`, plus play()'s own lazy kick if called
-cold. `CuelumeTests.swift` now forces the exact scenario that broke fix
-#1 (cold `isWarm` while `engine.isRunning` stays true throughout) and
-confirms `play()` still skips correctly. Full suite (58 tests) green;
-confirmed via `nm` that the iOS build actually contains the new symbols
-rather than trusting build success alone (learned that lesson from fix #1
-apparently not landing, or not actually being what crashed — either way,
-verify the binary, not just the build exit code).
+**Fix #2 (`03154fd`)** stopped trusting `engine.isRunning`. Added an
+explicit `isWarm` flag, true only via a one-shot `installTap` confirming a
+genuine CoreAudio render callback, invalidated on
+`UIApplication.didEnterBackgroundNotification`, re-confirmed on
+`willEnterForegroundNotification`. Correct for plain backgrounding — but
+**crashed a third time**, this time reported while the user was on an
+active FaceTime call, with a second, worse symptom: Spectra's audio was
+glitching the FaceTime call itself, persisting until the user left the
+app.
+
+**Why fix #2 still missed it:** an `AVAudioSession` interruption (a call,
+Siri, an alarm taking the audio session) isn't tied to app backgrounding
+at all — it can happen while Spectra stays fully foregrounded the entire
+time (tapping a notification while already mid-call). Fix #2 only
+listened for `UIApplication` background/foreground, so `isWarm` never got
+invalidated and the exact same crash fired on the exact same line.
+Separately: even having Cuelume *try* to activate its own audio session
+and start the engine while a call owns the hardware route is itself
+disruptive to the call — that's the glitch report, independent of
+whether it happens to crash.
+
+**Fix #3 (`2fbca02`):** added `AVAudioSession.interruptionNotification`
+handling (`.began` invalidates `isWarm`, `.ended` re-confirms it)
+alongside the existing lifecycle observers, plus a `shouldStayQuiet()`
+guard using Apple's own `secondaryAudioShouldBeSilencedHint` — true for
+the entire duration a call/Siri/alarm owns audio, not just around the
+edges. Both `play()` and the engine-(re)start path now bail out on it
+*before touching the engine at all*, so Cuelume stops interfering with a
+live call rather than just failing more gracefully into it. New tests
+use a test-only override (the real hint reflects live system state and
+can't be forced from a test process) to confirm both paths skip
+correctly. Full suite (60 tests) green; `nm` confirms the new interruption/
+silence-hint symbols are in the built binary.
+
+**Honest limit, stated plainly:** all three symptoms (the crash, the
+call-audio glitch, and each specific fix) were diagnosed and fixed from
+code + unit tests + build/symbol inspection — none of it can exercise a
+real concurrent FaceTime call with actual hardware audio routing in this
+environment. This needs a live retest **specifically while on a call**,
+not just "does the app still route to chat without crashing."
 
 ## What was NOT done — validate this next
 
