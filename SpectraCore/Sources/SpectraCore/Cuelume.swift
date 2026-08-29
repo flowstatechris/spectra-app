@@ -11,6 +11,9 @@
 //   Cuelume.shared.warmUp()   // optional: pre-render to avoid first-play hitch
 
 import AVFoundation
+#if os(iOS) || os(tvOS)
+import UIKit
+#endif
 
 // MARK: - Public API
 
@@ -32,6 +35,20 @@ public final class Cuelume {
     private let format: AVAudioFormat
     private var cache: [Sound: AVAudioPCMBuffer] = [:]
 
+    // engine.isRunning is NOT proof an IO cycle has actually happened — it's
+    // the engine's own software state, which iOS can silently leave stale
+    // ("true") across a background/foreground cycle even though the real
+    // hardware IO was torn down while suspended (.ambient doesn't keep audio
+    // alive in background). Relying on isRunning alone let a notification
+    // tap resume straight into node.play() on a graph with zero real IO
+    // cycles → the crash this file guards against. isWarm is our own,
+    // deterministically-tracked ground truth instead: false whenever we
+    // (re)start the engine, flipped true only by installTap confirming a
+    // real render callback actually happened. main-actor only — every read/
+    // write here is already on the main thread (play() callers, the tap's
+    // own dispatch-to-main, and the lifecycle notifications below).
+    private var isWarm = false
+
     private init() {
         // ponytail: stay silent under XCTest so unit runs don't play cues.
         if NSClassFromString("XCTestCase") != nil { isEnabled = false }
@@ -44,7 +61,8 @@ public final class Cuelume {
             voices.append(node)
         }
         configureSession()
-        try? engine.start()
+        startAndConfirmWarm()
+        observeLifecycle()
     }
 
     private func configureSession() {
@@ -56,23 +74,56 @@ public final class Cuelume {
         #endif
     }
 
+    /// Background teardown is invisible to `engine.isRunning` (see the
+    /// `isWarm` doc above), so foreground resume must re-confirm warmth
+    /// itself rather than trust that property. iOS/tvOS only — macOS has no
+    /// background-audio-teardown equivalent to guard against.
+    private func observeLifecycle() {
+        #if os(iOS) || os(tvOS)
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.isWarm = false }
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.startAndConfirmWarm() }
+        #endif
+    }
+
+    /// (Re)starts the engine and proves warmth with a one-shot tap instead
+    /// of guessing at a delay — the tap callback only fires once CoreAudio
+    /// has actually rendered a buffer, which is the one true signal that
+    /// AVAudioPlayerNode.play() is now safe to call.
+    private func startAndConfirmWarm() {
+        if !engine.isRunning { try? engine.start() }
+        guard engine.isRunning else { return }
+        let mixer = engine.mainMixerNode
+        mixer.removeTap(onBus: 0)  // idempotent if none installed
+        mixer.installTap(onBus: 0, bufferSize: 256, format: mixer.outputFormat(forBus: 0)) {
+            [weak self] _, _ in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.engine.mainMixerNode.removeTap(onBus: 0)
+                self.isWarm = true
+            }
+        }
+    }
+
     /// Plays a cue immediately. Overlap-safe; no-op when disabled.
     ///
-    /// Returns whether it actually scheduled a play. A stopped engine (e.g.
-    /// after a background→foreground resume — .ambient tears the session
-    /// down while backgrounded) gets (re)started here, but that first cue is
-    /// skipped rather than played: calling AVAudioPlayerNode.play() in the
-    /// same tick as AVAudioEngine.start(), before the engine has rendered a
-    /// single IO cycle, throws an uncaught NSException ("player did not see
-    /// an IO cycle") that crashes the whole app — reliably hit via a
-    /// notification tap resuming from background right into a cue-playing
-    /// event (approval/clarify/finish). The engine is warm for every play()
-    /// after this one.
+    /// Returns whether it actually scheduled a play. Cold cues (isWarm ==
+    /// false — freshly launched, or resuming from background where the
+    /// engine's IO was torn down invisibly to `engine.isRunning`) are
+    /// skipped rather than played: calling AVAudioPlayerNode.play() before
+    /// the engine has rendered a single real IO cycle throws an uncaught
+    /// NSException ("player did not see an IO cycle") that crashes the
+    /// whole app — reliably hit via a notification tap resuming straight
+    /// into a cue-playing event (approval/clarify/finish). See isWarm's doc
+    /// for why `engine.isRunning` alone isn't a safe enough check.
     @discardableResult
     public func play(_ sound: Sound, volume perPlay: Float = 1) -> Bool {
         guard isEnabled, volume * perPlay > 0 else { return false }
-        if !engine.isRunning {
-            try? engine.start()
+        guard isWarm else {
+            startAndConfirmWarm()
             return false
         }
         let buffer = cache[sound] ?? {
@@ -91,12 +142,13 @@ public final class Cuelume {
 
     // MARK: - Test-only hooks (internal: visible to @testable import only)
 
-    /// Simulates the exact precondition of the crash this file guards
-    /// against — an engine that isn't running (e.g. torn down by a
-    /// background session interruption) — without needing real device audio
-    /// hardware or a background/foreground cycle.
-    func _test_stopEngine() { engine.stop() }
-    var _test_engineIsRunning: Bool { engine.isRunning }
+    /// Forces isWarm false directly, without touching the engine — this is
+    /// the exact scenario that defeated the first attempt at this fix:
+    /// `engine.isRunning` can stay true across a background/foreground
+    /// cycle even though the real hardware IO was torn down, so a test (and
+    /// the real bug) must be able to go cold independent of engine.isRunning.
+    func _test_invalidateWarm() { isWarm = false }
+    var _test_isWarm: Bool { isWarm }
 }
 
 // MARK: - Recipe model  (mirrors sounds/recipes.js)
