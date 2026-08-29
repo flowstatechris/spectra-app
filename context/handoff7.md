@@ -64,21 +64,46 @@ earlier. The new plist targets `serve.log`/`serve.error.log` (matching
 `ai.hermes.gateway`'s split convention) going forward; `serve.out` is now
 dead weight from the old manual invocation.
 
+## Update — live-device follow-up (same day)
+
+The user tested on a real device: **all three triggers fire correctly.**
+Tapping a notification to route into the chat crashed the app, though —
+Xcode console showed an uncaught `com.apple.coreaudio.avfaudio` exception,
+`'player did not see an IO cycle'`, terminating the process. (The keyboard
+auto-layout warnings and pasteboard error in the same log dump were noise;
+that one line was the actual crash.)
+
+Root cause, confirmed by direct code match: `Cuelume.play()`
+(`SpectraCore/Sources/SpectraCore/Cuelume.swift`) plays `.scan` on
+`message.complete` ("response finished") and `.arrival` on
+`approval.request`/`clarify.request` — literally the three push triggers
+just added. `.ambient` audio session category tears the engine down while
+backgrounded; the old `play()` restarted it and called
+`AVAudioPlayerNode.play()` in the very same tick, before any IO cycle —
+exactly the crash pattern, hit reliably by a notification tap resuming
+straight into a cue-playing event.
+
+**Fixed** (commit `8ce97cc`): `play()` now skips the cue instead of playing
+into the race when it has to (re)start a stopped engine — engine is warm
+for every call after. Minor tradeoff: the very first cue after a cold
+resume is silently dropped. New `CuelumeTests.swift` (2 tests) reproduces
+the precondition via test-only hooks; confirmed red against the old logic,
+green against the fix. Full SpectraCore suite (58 tests) and the iOS
+simulator build both pass.
+
 ## What was NOT done — validate this next
 
 The existing `approval.request` push was **not** re-validated against a real
-approval on a physical device this session (that needs the phone, which this
-session didn't have). Code review found no actual bug — `register_gateway_notify`'s
+approval on a physical device before the above test (that needs the phone,
+which the earlier part of this session didn't have). Code review found no
+actual bug in the trigger/registration path itself — `register_gateway_notify`'s
 session-key registration matches the lookup key used elsewhere (`session["session_key"]`,
 same value at all 3 call sites), and `apns_sender.py` logs real send failures
-(`logger.warning`) rather than swallowing them. The prior "never confirmed
-live" note may simply mean nobody watched a real phone catch it, not that
-there's a known bug. **Next physical-device session should background the
-app and drive all three triggers for real**: approval (existing), clarify,
-and finish — confirming title/body, foreground-suppression, and tap-routing
-for each, and specifically confirming an interrupted/erroring turn produces
-*no* Finish push (that's the negative case carrying the actual scope
-decision, easy to skip by accident).
+(`logger.warning`) rather than swallowing them. **Now confirmed live**: per
+the update above, all three triggers do fire on a real device. Foreground-
+suppression, exact title/body content, and finish's no-push-on-error/
+interrupted behavior still haven't been explicitly checked one-by-one —
+worth a quick pass now that the crash is out of the way.
 
 Also worth a cheap check while there: per handoff6, off-LAN/cellular chat
 access was never verified. APNs delivery itself doesn't depend on that (it's
