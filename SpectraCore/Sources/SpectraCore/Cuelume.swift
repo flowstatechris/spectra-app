@@ -57,9 +57,24 @@ public final class Cuelume {
     }
 
     /// Plays a cue immediately. Overlap-safe; no-op when disabled.
-    public func play(_ sound: Sound, volume perPlay: Float = 1) {
-        guard isEnabled, volume * perPlay > 0 else { return }
-        if !engine.isRunning { try? engine.start() }
+    ///
+    /// Returns whether it actually scheduled a play. A stopped engine (e.g.
+    /// after a background→foreground resume — .ambient tears the session
+    /// down while backgrounded) gets (re)started here, but that first cue is
+    /// skipped rather than played: calling AVAudioPlayerNode.play() in the
+    /// same tick as AVAudioEngine.start(), before the engine has rendered a
+    /// single IO cycle, throws an uncaught NSException ("player did not see
+    /// an IO cycle") that crashes the whole app — reliably hit via a
+    /// notification tap resuming from background right into a cue-playing
+    /// event (approval/clarify/finish). The engine is warm for every play()
+    /// after this one.
+    @discardableResult
+    public func play(_ sound: Sound, volume perPlay: Float = 1) -> Bool {
+        guard isEnabled, volume * perPlay > 0 else { return false }
+        if !engine.isRunning {
+            try? engine.start()
+            return false
+        }
         let buffer = cache[sound] ?? {
             let b = CuelumeSynth.render(RECIPES[sound]!, sampleRate: sampleRate, format: format)
             cache[sound] = b; return b
@@ -68,10 +83,20 @@ public final class Cuelume {
         node.volume = min(1, max(0, volume * perPlay))
         node.scheduleBuffer(buffer, at: nil, options: [])
         if !node.isPlaying { node.play() }
+        return true
     }
 
     /// Optional: pre-render everything up front to avoid a first-play hitch.
     public func warmUp() { for s in Sound.allCases { play(s, volume: 0) } }
+
+    // MARK: - Test-only hooks (internal: visible to @testable import only)
+
+    /// Simulates the exact precondition of the crash this file guards
+    /// against — an engine that isn't running (e.g. torn down by a
+    /// background session interruption) — without needing real device audio
+    /// hardware or a background/foreground cycle.
+    func _test_stopEngine() { engine.stop() }
+    var _test_engineIsRunning: Bool { engine.isRunning }
 }
 
 // MARK: - Recipe model  (mirrors sounds/recipes.js)
