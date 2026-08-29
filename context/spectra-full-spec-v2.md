@@ -321,7 +321,10 @@ APNs push (token-based, ES256 `.p8`). Server half lives in Hermes; the client ha
 
 - **Transport** — Hermes signs an ES256 provider JWT with the `.p8` and POSTs over HTTP/2 to APNs. Per-token environment: dev/sandbox builds → `api.sandbox.push.apple.com`, Release/TestFlight → `api.push.apple.com`. The client reports its env at registration; the same `.p8` serves both. Dead tokens (410 / `BadDeviceToken`) are pruned on send.
 - **Registration** — the client asks permission + `registerForRemoteNotifications` once it reaches the main app, then POSTs its device token to `POST /api/apns/register` (Bearer-auth). The token can race ahead of auth on a cached cold-launch, so it's re-flushed after `auth.restore()` and on foreground.
-- **Trigger** — fires on `approval.request` (the time-sensitive, actionable case), hooked at the gateway's approval-emit seam. Body carries the profile name + redacted command. Reply-completion pings are deferred.
+- **Trigger** — three events (v1.8.8), each hooked at its own gateway seam, all through the same `apns_sender.send_alert()`:
+  - `approval.request` (the time-sensitive, actionable case) — body carries the profile name + redacted command, truncated to 180 chars.
+  - `message.complete` (reply-completion, "Finish") — fires only when `status == "complete"` (not error/interrupted); body is a ~100-char plain-text snippet of the reply with markdown/code stripped.
+  - `clarify.request` (the agent's soft, non-blocking question) — body carries the actual question text (first question, for a batch clarify), truncated to 180 chars.
 - **Foreground suppression** — the client drops the banner when the pushed profile is already on screen (`willPresent`), so it only surfaces when not foregrounded for that profile.
 - **Rich content** — iOS handles lock-screen visibility per user preference; approval summaries appear directly in the notification.
 - Interactive inline actions (Approve/Deny from the notification) remain a stretch goal, not a v1 blocker.
