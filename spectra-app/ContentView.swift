@@ -8,24 +8,40 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("appearance") private var appearanceRaw = Appearance.system.rawValue
     @State private var selectedTab = MainTab.chat
+    // Held for at least 0.75s (see .task below) so restoreOnLaunch()'s async
+    // token check has time to land before anything is shown. Without this,
+    // a revoked token flips phase from the optimistic cache-painted .ready
+    // to .needsLogin mid-frame — a flash of the sign-in screen behind chat
+    // that's already on screen. A valid token never gets that far: launching
+    // just clears straight into .ready.
+    @State private var launching = true
 
     var body: some View {
         Group {
-            switch app.phase {
-            case .needsBackend:
-                BackendConfigView()
-            case .needsLogin, .loggingIn, .error:
-                LoginView()
-            case .pickingProfiles:
-                ProfilePickerView()
-            case .ready:
-                mainTabs
-                    .task { PushManager.shared.start(app: app) }   // §11: ask + register
+            if launching {
+                LaunchScreen()
+            } else {
+                switch app.phase {
+                case .needsBackend:
+                    BackendConfigView()
+                case .needsLogin, .loggingIn, .error:
+                    LoginView()
+                case .pickingProfiles:
+                    ProfilePickerView()
+                case .ready:
+                    mainTabs
+                        .task { PushManager.shared.start(app: app) }   // §11: ask + register
+                }
             }
         }
         .tint(Theme.accent)
         .preferredColorScheme(Appearance(rawValue: appearanceRaw)?.scheme)
-        .task { await app.restoreOnLaunch() }
+        .task {
+            async let restore: Void = app.restoreOnLaunch()
+            try? await Task.sleep(for: .milliseconds(750))
+            await restore   // no-op if restoreOnLaunch already finished
+            withAnimation(.easeOut(duration: 0.25)) { launching = false }
+        }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active: Task { await app.refreshAll() }

@@ -78,3 +78,53 @@ final class PersistenceTests: XCTestCase {
         XCTAssertFalse(json.lowercased().contains("serversession"))
     }
 }
+
+// MARK: - Memory bounds
+
+/// The three caps that keep a long-lived install from growing without limit.
+final class MemoryBoundsTests: XCTestCase {
+
+    func testToolTextIsClampedAndMarked() {
+        let huge = String(repeating: "x", count: ProfileSession.toolTextLimit * 3)
+        let clamped = ProfileSession.clamp(huge)
+        XCTAssertLessThan(clamped.utf8.count, huge.utf8.count)
+        XCTAssertTrue(clamped.hasPrefix("xxx"))
+        XCTAssertTrue(clamped.contains("truncated"))
+    }
+
+    func testShortToolTextIsUntouched() {
+        XCTAssertEqual(ProfileSession.clamp("ls -la"), "ls -la")
+    }
+
+    /// Clamping must not split a multi-byte character into invalid UTF-8.
+    func testClampKeepsValidUTF8() {
+        let emoji = String(repeating: "🙂", count: ProfileSession.toolTextLimit)
+        let clamped = ProfileSession.clamp(emoji)
+        XCTAssertTrue(clamped.contains("truncated"))
+        XCTAssertEqual(clamped, String(decoding: Array(clamped.utf8), as: UTF8.self))
+    }
+
+    func testUploadBodyIsWellFormedJSONWithoutCopyingThroughSerialization() throws {
+        let body = try Attachments.dataURLBody(data: Data([0xDE, 0xAD, 0xBE, 0xEF]),
+                                               filename: #"od"d "quote".txt"#,
+                                               mime: "text/plain")
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
+        XCTAssertEqual(json["filename"], #"od"d "quote".txt"#)
+        XCTAssertEqual(json["data_url"], "data:text/plain;base64,3q2+7w==")
+    }
+
+    func testOversizedUploadIsRefusedNotAttempted() {
+        XCTAssertThrowsError(
+            try Attachments.dataURLBody(data: Data(count: Attachments.maxUploadBytes + 1),
+                                        filename: "big.bin", mime: "application/octet-stream"))
+    }
+
+    func testPersistedHistoryIsCapped() {
+        let msgs = (0..<(Persistence.historyLimit + 50)).map {
+            Message(id: "m\($0)", role: .user, text: "\($0)")
+        }
+        let kept = Array(msgs.suffix(Persistence.historyLimit))
+        XCTAssertEqual(kept.count, Persistence.historyLimit)
+        XCTAssertEqual(kept.last?.id, msgs.last?.id)   // newest survives, not oldest
+    }
+}

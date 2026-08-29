@@ -20,6 +20,13 @@ public struct PersistedState: Codable, Sendable {
 }
 
 public enum Persistence {
+    /// Newest messages kept per session in the snapshot. The file is fully
+    /// decoded into memory on every cold launch and rewritten on every turn
+    /// boundary, so an uncapped history meant both costs grew for the life of
+    /// the install — with sent-image thumbnails riding along inside it. Older
+    /// turns still live server-side and come back via session.resume.
+    public static let historyLimit = 200
+
     // Application Support/spectra-state.json — not Documents (not user-facing).
     private static var fileURL: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory,
@@ -29,7 +36,9 @@ public enum Persistence {
     }
 
     public static func load() -> PersistedState? {
-        guard let data = try? Data(contentsOf: fileURL) else { return nil }
+        // Mapped: the decoder reads through the file instead of us holding the
+        // whole snapshot as bytes *and* as objects at the same time.
+        guard let data = try? Data(contentsOf: fileURL, options: .mappedIfSafe) else { return nil }
         return try? JSONDecoder().decode(PersistedState.self, from: data)
     }
 

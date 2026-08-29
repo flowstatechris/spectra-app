@@ -1,4 +1,5 @@
 import SwiftUI
+import ImageIO
 import PhotosUI
 import UniformTypeIdentifiers
 import SpectraCore
@@ -9,6 +10,7 @@ import ThinkingOrbsKit
 struct ChatView: View {
     @Environment(AppState.self) private var app
     @State private var draft = ""
+    @FocusState private var draftFocused: Bool
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var showingPhotoLibrary = false
     @State private var showingCamera = false
@@ -35,12 +37,16 @@ struct ChatView: View {
                 offlineBanner(error)
             }
             if let session = app.activeSession {
-                thread(session)
-                if let approval = session.pendingApproval,
-                   collapsedApprovalID == approval.id {
-                    approvalChip(approval)
+                if session.isSwitchingChat {
+                    loadingChat
+                } else {
+                    thread(session)
+                    if let approval = session.pendingApproval,
+                       collapsedApprovalID == approval.id {
+                        approvalChip(approval)
+                    }
+                    inputBar(session)
                 }
-                inputBar(session)
             } else {
                 emptyState
             }
@@ -54,6 +60,7 @@ struct ChatView: View {
         .animation(.snappy, value: compactHeader)
         .animation(.snappy, value: app.activeSession?.pendingApproval)
         .animation(.snappy, value: app.activeSession?.pendingClarify)
+        .animation(.snappy, value: app.activeSession?.isSwitchingChat)
         .task(id: app.activeProfileName) {
             scrolledIntoConversation = false
             showingInitialHeader = true
@@ -167,57 +174,92 @@ struct ChatView: View {
                       connectionState: app.connectionState)
     }
 
+    // Row inset shared by every thread row: horizontal gutter only — vertical
+    // spacing comes from .listRowSpacing below, outer top/bottom breathing
+    // room from .contentMargins.
+    private var threadRowInsets: EdgeInsets {
+        EdgeInsets(top: 0, leading: Space.gutter, bottom: 0, trailing: Space.gutter)
+    }
+
     @ViewBuilder
     private func thread(_ session: ProfileSession) -> some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
-                    ForEach(threadItems(session.messages)) { item in
-                        switch item {
-                        case .message(let message):
-                            MessageRow(message: message, session: session,
-                                       collapsedApprovalID: $collapsedApprovalID)
-                                .id(message.id)
-                                .background(
-                                    RoundedRectangle(cornerRadius: Radius.sm)
-                                        .fill(Theme.accent.opacity(
-                                            highlightedMessageID == message.id ? 0.14 : 0))
-                                        .padding(.horizontal, -8)
-                                )
-                                .animation(.easeInOut(duration: 0.3), value: highlightedMessageID)
-                                .transition(.asymmetric(
-                                    insertion: .opacity.combined(with: .move(edge: .bottom)),
-                                    removal: .opacity))
-                        case .statusRun(let id, let lines, let live):
-                            StatusRunRow(lines: lines, live: live)
-                                .id(id)
-                                .transition(.opacity)
-                        case .toolRun(let id, let activities, let live):
-                            // A run is only "live" while the turn actually is:
-                            // a turn that ends on tools with no closing answer
-                            // would otherwise shimmer forever.
-                            ToolRunRow(activities: activities,
-                                       live: live && session.isRunning,
-                                       statusLabel: statusLabel)
-                                .id(id)
-                                .transition(.opacity)
-                        }
-                    }
-                    if awaitingFirstOutput(session) {
-                        thinkingPlaceholder
-                            .id(Self.placeholderID)
+            // List (UITableView-backed), not ScrollView+LazyVStack: a plain
+            // LazyVStack only knows a row's real height once it's been drawn,
+            // so the system scrollbar — built against that *estimate* — maps
+            // a fast thumb-drag past the true end of a long thread before the
+            // real heights resolve and it springs back (the "scroll into the
+            // void" glitch). UITableView's row-height machinery doesn't have
+            // that estimation gap.
+            List {
+                ForEach(threadItems(session.messages)) { item in
+                    switch item {
+                    case .message(let message):
+                        MessageRow(message: message, session: session,
+                                   collapsedApprovalID: $collapsedApprovalID)
+                            .id(message.id)
+                            .background(
+                                RoundedRectangle(cornerRadius: Radius.sm)
+                                    .fill(Theme.accent.opacity(
+                                        highlightedMessageID == message.id ? 0.14 : 0))
+                                    .padding(.horizontal, -8)
+                            )
+                            .animation(.easeInOut(duration: 0.3), value: highlightedMessageID)
+                            .transition(.asymmetric(
+                                insertion: .opacity.combined(with: .move(edge: .bottom)),
+                                removal: .opacity))
+                    case .statusRun(let id, let lines, let live):
+                        // Raw (unprefixed) id, not the ForEach row's own
+                        // "run:\(id)" identity — scrollToActivity() below
+                        // targets individual raw message ids, including ones
+                        // folded into this group, so the scroll-anchor here
+                        // has to match that, not the row's diffing identity.
+                        StatusRunRow(lines: lines, live: live)
+                            .id(id)
+                            .transition(.opacity)
+                    case .toolRun(let id, let activities, let live):
+                        // A run is only "live" while the turn actually is:
+                        // a turn that ends on tools with no closing answer
+                        // would otherwise shimmer forever.
+                        ToolRunRow(activities: activities,
+                                   live: live && session.isRunning,
+                                   statusLabel: statusLabel)
+                            .id(id)
                             .transition(.opacity)
                     }
                 }
-                .animation(.snappy, value: session.messages.count)
-                .animation(.snappy, value: awaitingFirstOutput(session))
-                .padding(.horizontal, Space.gutter).padding(.vertical, 20)
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+                .listRowInsets(threadRowInsets)
+                if awaitingFirstOutput(session) {
+                    thinkingPlaceholder
+                        .id(Self.placeholderID)
+                        .transition(.opacity)
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(threadRowInsets)
+                }
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)   // let .paper() show through
+            .listRowSpacing(14)
+            .environment(\.defaultMinListRowHeight, 1)
+            .contentMargins(.vertical, 20, for: .scrollContent)
+            .animation(.snappy, value: session.messages.count)
+            .animation(.snappy, value: awaitingFirstOutput(session))
             .defaultScrollAnchor(.bottom)
             .scrollDismissesKeyboard(.immediately)
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 geometry.contentOffset.y + geometry.contentInsets.top > 48
             } action: { _, scrolled in
+                // While the compose field is focused, any offset change is the
+                // keyboard reflowing the viewport (defaultScrollAnchor
+                // re-anchoring), not a real scroll — a real drag would have
+                // dismissed the keyboard immediately (scrollDismissesKeyboard
+                // above). Reacting to it collapses the header mid-keyboard-
+                // animation, most visible in a short/new chat where this is
+                // the only offset change that ever happens.
+                guard !draftFocused else { return }
                 scrolledIntoConversation = scrolled
             }
             // Pinned = the visible bottom is within 40pt of the content bottom.
@@ -326,6 +368,21 @@ struct ChatView: View {
         .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 
+    // Shown while switchTo()/newSession() is fetching a conversation with no
+    // local cache — same orb/eyebrow language as onboarding's sign-in wait,
+    // so it doesn't read as a distinct new UI.
+    private var loadingChat: some View {
+        VStack(spacing: 18) {
+            Spacer()
+            OrbView(status: .connecting, connectionState: app.connectionState,
+                    size: .px64, showsLabel: false)
+            Eyebrow("Loading chat")
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+        .transition(.opacity)
+    }
+
     private var emptyState: some View {
         VStack(spacing: 18) {
             Spacer()
@@ -367,6 +424,7 @@ struct ChatView: View {
                     .font(Theme.mono(15))
                     .foregroundStyle(Theme.ink)
                     .lineLimit(1...6)
+                    .focused($draftFocused)
                     .disabled(!session.canSend)
                     .padding(.vertical, 10).padding(.horizontal, 16)
                     .background(Theme.plate,
@@ -421,12 +479,17 @@ struct ChatView: View {
             guard !items.isEmpty else { return }
             Task {
                 defer { pickerItems = [] }
+                // One item at a time: `raw` and its downsampled pair are released
+                // before the next picked photo is loaded, so peak stays flat in the
+                // number of attachments instead of scaling with it.
                 for item in items {
-                    guard let raw = try? await item.loadTransferable(type: Data.self),
-                          let ui = UIImage(data: raw) else { continue }
+                    guard let raw = try? await item.loadTransferable(type: Data.self) else { continue }
+                    let sized = await Task.detached(priority: .userInitiated) {
+                        (Downsample.jpeg(raw, maxDim: 1600, quality: 0.8),
+                         Downsample.jpeg(raw, maxDim: 240, quality: 0.7))
+                    }.value
                     await app.attachImage(profileName: session.profile.name,
-                                          imageData: ui.jpeg(maxDim: 1600, quality: 0.8),
-                                          thumbnail: ui.jpeg(maxDim: 240, quality: 0.7))
+                                          imageData: sized.0, thumbnail: sized.1)
                 }
             }
         }
@@ -434,10 +497,16 @@ struct ChatView: View {
                       maxSelectionCount: 4, matching: .images)
         .sheet(isPresented: $showingCamera) {
             CameraPicker { image in
+                // Encode once here (the picker already handed us a decoded image),
+                // then both sizes come off that Data on a background thread.
+                guard let encoded = image.jpegData(compressionQuality: 0.9) else { return }
                 Task {
+                    let sized = await Task.detached(priority: .userInitiated) {
+                        (Downsample.jpeg(encoded, maxDim: 1600, quality: 0.8),
+                         Downsample.jpeg(encoded, maxDim: 240, quality: 0.7))
+                    }.value
                     await app.attachImage(profileName: session.profile.name,
-                                          imageData: image.jpeg(maxDim: 1600, quality: 0.8),
-                                          thumbnail: image.jpeg(maxDim: 240, quality: 0.7),
+                                          imageData: sized.0, thumbnail: sized.1,
                                           filename: "camera.jpg")
                 }
             }
@@ -488,7 +557,10 @@ struct ChatView: View {
                     let scoped = url.startAccessingSecurityScopedResource()
                     defer { if scoped { url.stopAccessingSecurityScopedResource() } }
                     let type = try? url.resourceValues(forKeys: [.contentTypeKey]).contentType
-                    return (try Data(contentsOf: url), url.lastPathComponent,
+                    // Mapped, not copied: a large import stays backed by the file
+                    // and pages in under the base64 encode rather than up front.
+                    return (try Data(contentsOf: url, options: .mappedIfSafe),
+                            url.lastPathComponent,
                             type?.preferredMIMEType ?? "application/octet-stream")
                 }.value
                 await app.attachFile(profileName: session.profile.name, data: file.0,
@@ -1638,17 +1710,27 @@ private struct CameraPicker: UIViewControllerRepresentable {
 
 extension URL: @retroactive Identifiable { public var id: String { absoluteString } }
 
-private extension UIImage {
-    /// Downscale so the longest side ≤ maxDim, then JPEG-encode. Keeps uploads
-    /// and persisted thumbnails small. ponytail: nearest-neighbour-free UIKit resize.
-    func jpeg(maxDim: CGFloat, quality: CGFloat) -> Data {
-        let longest = max(size.width, size.height)
-        let scale = longest > maxDim ? maxDim / longest : 1
-        let target = CGSize(width: size.width * scale, height: size.height * scale)
-        let out = UIGraphicsImageRenderer(size: target).image { _ in
-            draw(in: CGRect(origin: .zero, size: target))
-        }
-        return out.jpegData(compressionQuality: quality) ?? Data()
+/// Downscale-on-decode. The obvious `UIImage(data:)` + `UIGraphicsImageRenderer`
+/// route costs two full-resolution bitmaps: a 12MP photo decodes to ~48 MB, and
+/// the renderer then allocates its own canvas at the *screen* scale (3x on
+/// device), so a "1600pt" target really meant a 4800x3600 / 69 MB buffer. Two
+/// sizes per attachment, up to four attachments, and that alone is a jetsam.
+///
+/// ImageIO never materialises the full bitmap: it decodes straight to the
+/// requested pixel size, so peak stays proportional to the *output*.
+enum Downsample {
+    /// Longest side ≤ maxDim pixels, JPEG-encoded. Empty Data if undecodable.
+    static func jpeg(_ data: Data, maxDim: CGFloat, quality: CGFloat) -> Data {
+        guard let source = CGImageSourceCreateWithData(
+                data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+              let thumb = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,   // honour EXIF orientation
+                kCGImageSourceShouldCacheImmediately: true,
+                kCGImageSourceThumbnailMaxPixelSize: maxDim,
+              ] as CFDictionary)
+        else { return Data() }
+        return UIImage(cgImage: thumb).jpegData(compressionQuality: quality) ?? Data()
     }
 }
 

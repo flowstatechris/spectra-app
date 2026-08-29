@@ -24,6 +24,11 @@ public final class ProfileSession: Identifiable {
     /// Image staged on the server (via image.attach) waiting to ride the next
     /// send() as an inline thumbnail on the user's message (§9).
     public private(set) var pendingAttachments: [Message.Attachment] = []
+    /// True while switchTo()/newSession() is fetching a conversation we don't
+    /// already have cached — distinct from `status == .connecting`, which also
+    /// fires on ordinary reconnect/relaunch when the *current* conversation's
+    /// messages are already correct on screen and no loading UI is wanted.
+    public private(set) var isSwitchingChat = false
 
     private let rpc: HermesRPCConnection
     /// Id of the message currently being streamed (set on first token, cleared
@@ -34,9 +39,24 @@ public final class ProfileSession: Identifiable {
     /// Rich local timelines by durable session id, so switching away and back
     /// restores folded tool/approval/clarify rows instead of downgrading to
     /// server text history. In-memory for this run only — persistence keeps
-    /// just the current session (see Persistence.swift). ponytail: one entry
-    /// per visited session; add an LRU cap if that ever bites.
+    /// just the current session (see Persistence.swift).
+    ///
+    /// Bounded: every entry is a whole conversation (tool output, attachment
+    /// thumbnails and all), so browsing a dozen sessions used to pin a dozen
+    /// full threads in memory for the rest of the run. Past the cap the
+    /// least-recently-visited is dropped and re-fetched from Hermes if reopened.
     private var timelineCache: [String: [Message]] = [:]
+    private var timelineOrder: [String] = []          // oldest visited first
+    private static let timelineCacheLimit = 4
+
+    private func cacheTimeline(_ messages: [Message], for id: String) {
+        timelineCache[id] = messages
+        timelineOrder.removeAll { $0 == id }
+        timelineOrder.append(id)
+        while timelineOrder.count > Self.timelineCacheLimit {
+            timelineCache.removeValue(forKey: timelineOrder.removeFirst())
+        }
+    }
     /// Armed on send(), cleared after the turn's first agent activity — so the
     /// `bloom` cue fires once per turn, not on every tool/delta. (SFX §1.8)
     private var turnDidBloom = false
@@ -134,7 +154,8 @@ public final class ProfileSession: Identifiable {
     /// Start a fresh server conversation, clearing the visible timeline.
     public func newSession() async {
         guard canSwitchSessions else { return }
-        if let current = storedSessionID { timelineCache[current] = messages }
+        if let current = storedSessionID { cacheTimeline(messages, for: current) }
+        messages = []   // it'll end up empty either way — no reason to show the old thread meanwhile
         do {
             let r = try await rpc.call("session.create",
                                        params: ["profile": profile.name,
@@ -150,7 +171,21 @@ public final class ProfileSession: Identifiable {
     /// pulls messages, because the user is deliberately changing conversations.
     public func switchTo(_ storedID: String) async {
         guard canSwitchSessions, storedID != storedSessionID else { return }
-        if let current = storedSessionID { timelineCache[current] = messages }
+        if let current = storedSessionID { cacheTimeline(messages, for: current) }
+        // Paint the cached timeline immediately if we've visited this session
+        // before this run — no reason to stare at a spinner for content we
+        // already have. reconcile() below still runs once the resume RPC
+        // lands, and can replace it if the server turns out to be ahead.
+        // No cache → this is a real fetch (possibly a long thread): clear the
+        // outgoing conversation instead of leaving it on screen, and flag the
+        // loading state so the view can show something better than "empty".
+        if let cached = timelineCache[storedID] {
+            messages = cached
+        } else {
+            messages = []
+            isSwitchingChat = true
+        }
+        defer { isSwitchingChat = false }
         status = .connecting
         do {
             let r = try await rpc.call("session.resume",
@@ -470,7 +505,9 @@ public final class ProfileSession: Identifiable {
     }
 
     private func appendToStreamingMessage(_ text: String) {
-        if let id = streamingMessageID, let idx = messages.firstIndex(where: { $0.id == id }) {
+        // lastIndex: the streaming message is at or near the tail, so this ends
+        // in a step or two instead of walking the whole thread once per token.
+        if let id = streamingMessageID, let idx = messages.lastIndex(where: { $0.id == id }) {
             messages[idx].text += text
         } else {
             let msg = Message(role: .agent, text: text)
@@ -607,22 +644,35 @@ public final class ProfileSession: Identifiable {
         messages[idx].kind = .toolActivity(tool)
     }
 
+    /// Tool payloads are unbounded — a `cat` of a big file, a repo-wide grep —
+    /// and a captured one is kept three times over: in `messages`, in
+    /// `timelineCache`, and in the on-disk snapshot that gets decoded again on
+    /// every launch. The detail view is a scroll box nobody reads a megabyte in,
+    /// so cap what we retain and say so where it was cut.
+    nonisolated static let toolTextLimit = 16 * 1024
+
+    nonisolated static func clamp(_ text: String) -> String {
+        guard text.utf8.count > toolTextLimit else { return text }
+        let kept = String(decoding: text.utf8.prefix(toolTextLimit), as: UTF8.self)
+        return kept + "\n\n… truncated (\(text.utf8.count) bytes total)"
+    }
+
     private static func toolInput(_ payload: [String: Any]) -> String? {
         if let args = payload["args"] as? [String: Any], !args.isEmpty {
             for key in ["command", "path", "file_path", "query", "url"] {
-                if let value = args[key] as? String, !value.isEmpty { return value }
+                if let value = args[key] as? String, !value.isEmpty { return clamp(value) }
             }
-            return jsonText(args)
+            return jsonText(args).map(clamp)
         }
-        if let text = payload["args_text"] as? String, !text.isEmpty { return text }
+        if let text = payload["args_text"] as? String, !text.isEmpty { return clamp(text) }
         return nil
     }
 
     private static func toolOutput(_ payload: [String: Any]) -> String? {
-        if let text = payload["result_text"] as? String, !text.isEmpty { return text }
+        if let text = payload["result_text"] as? String, !text.isEmpty { return clamp(text) }
         guard let result = payload["result"] else { return nil }
-        if let text = result as? String { return text.isEmpty ? nil : text }
-        return jsonText(result)
+        if let text = result as? String { return text.isEmpty ? nil : clamp(text) }
+        return jsonText(result).map(clamp)
     }
 
     private static func jsonText(_ value: Any) -> String? {

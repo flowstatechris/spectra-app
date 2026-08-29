@@ -2,6 +2,30 @@ import SwiftUI
 import AuthenticationServices
 import SpectraCore
 
+/// Cold-launch splash — see ContentView's `launching` gate for why this holds
+/// the screen briefly rather than jumping straight to whatever phase
+/// restoreOnLaunch() lands on.
+struct LaunchScreen: View {
+    var body: some View {
+        VStack {
+            Spacer()
+            Image("LogoMark")
+                .resizable().scaledToFit()
+                .frame(width: 64, height: 64)
+                .foregroundStyle(Theme.ink)
+            Text("Spectra")
+                .font(Theme.serif(52, relativeTo: .largeTitle))
+                .foregroundStyle(Theme.ink)
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
+                .padding(.top, 18)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .paper()
+    }
+}
+
 /// Step 1 (spec §5): backend base-URL entry — editorial cover.
 struct BackendConfigView: View {
     @Environment(AppState.self) private var app

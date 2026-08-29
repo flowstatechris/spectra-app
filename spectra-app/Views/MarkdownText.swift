@@ -48,14 +48,35 @@ enum RenderedBlock: Equatable, Sendable {
 /// Bounded cache of rendered messages, so a row scrolling back into view reuses
 /// its parse instead of recomputing. Main-actor isolated; the parse itself runs
 /// off-main and only the lookup/store touch this.
+///
+/// Two things keep it honest about memory. The key is a *hash* of the message,
+/// not the message: keying by the text stored a second full copy of every
+/// cached message on top of the one the thread already holds. And entries are
+/// bounded by cost as well as count — an AttributedString run table is several
+/// times the size of its source text, so 200 long agent replies under a
+/// count-only limit was tens of megabytes that nothing ever released.
 @MainActor
 private final class MarkdownCache {
     static let shared = MarkdownCache()
     private final class Box { let blocks: [RenderedBlock]; init(_ b: [RenderedBlock]) { blocks = b } }
     private let cache = NSCache<NSString, Box>()
-    init() { cache.countLimit = 200 }
-    func get(_ key: String) -> [RenderedBlock]? { cache.object(forKey: key as NSString)?.blocks }
-    func set(_ key: String, _ v: [RenderedBlock]) { cache.setObject(Box(v), forKey: key as NSString) }
+
+    init() {
+        cache.countLimit = 120
+        cache.totalCostLimit = 8 * 1024 * 1024
+    }
+
+    /// Collision risk on a per-process render cache is not worth a real digest;
+    /// length is mixed in so same-hash-different-length texts can't alias.
+    private func key(_ text: String) -> NSString { "\(text.hashValue):\(text.utf8.count)" as NSString }
+
+    func get(_ text: String) -> [RenderedBlock]? { cache.object(forKey: key(text))?.blocks }
+
+    func set(_ text: String, _ v: [RenderedBlock]) {
+        // ~4x source bytes approximates the parsed form; exactness isn't needed,
+        // only that a huge message counts as huge.
+        cache.setObject(Box(v), forKey: key(text), cost: text.utf8.count * 4)
+    }
 }
 
 /// Renders agent markdown (spec §9). Block structure from Markdown.blocks, inline

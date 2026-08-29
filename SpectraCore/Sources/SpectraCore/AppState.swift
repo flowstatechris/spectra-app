@@ -258,8 +258,11 @@ public final class AppState {
             activeProfileName: activeProfileName,
             order: order,
             sessions: order.compactMap { name in
-                sessions[name].map { PersistedState.Session(profile: $0.profile, messages: $0.messages,
-                                                             storedSessionID: $0.storedSessionID) }
+                sessions[name].map {
+                    PersistedState.Session(profile: $0.profile,
+                                           messages: Array($0.messages.suffix(Persistence.historyLimit)),
+                                           storedSessionID: $0.storedSessionID)
+                }
             },
             activity: activityFeed)   // already bounded to feedCap
         Persistence.save(snap)
@@ -293,6 +296,13 @@ public final class AppState {
     public func attachFile(profileName: String, data: Data, filename: String,
                            mime: String) async {
         guard let session = sessions[profileName], let rpc else { return }
+        // file.attach rides the JSON-RPC socket, so the payload is base64'd into
+        // a request the RPC layer then serializes — unavoidably a few multiples
+        // of the file in RAM. Refuse oversized input up front instead of dying.
+        guard data.count <= Attachments.maxUploadBytes else {
+            session.noteError("\(filename) is too large to attach.")
+            return
+        }
         do {
             try await session.ensureSession()
             guard let sid = session.serverSessionID else { return }
@@ -318,14 +328,24 @@ public final class AppState {
     /// Fetch agent-sent media bytes (§9 receive-side), cached so scrolling
     /// doesn't refetch. Returns nil if not logged in / fetch fails — the view
     /// falls back to a placeholder card.
-    private var mediaCache: [String: Data] = [:]
+    /// NSCache, not a Dictionary: agent media is full-size image bytes, and a
+    /// plain dictionary kept every image the agent ever sent alive for the life
+    /// of the process with no way to give it back. NSCache is bounded by total
+    /// bytes *and* purges itself under system memory pressure; a purged entry
+    /// just refetches.
+    private let mediaCache: NSCache<NSString, NSData> = {
+        let c = NSCache<NSString, NSData>()
+        c.totalCostLimit = 24 * 1024 * 1024
+        return c
+    }()
+
     public func fetchAgentMedia(_ media: Message.ReceivedMedia) async -> Data? {
-        if let hit = mediaCache[media.id] { return hit }
+        if let hit = mediaCache.object(forKey: media.id as NSString) { return hit as Data }
         guard let auth, let backend else { return nil }
         do {
             let token = try await auth.validAccessToken()
             let data = try await MediaFetch.data(for: media, baseURL: backend.baseURL, token: token)
-            mediaCache[media.id] = data
+            mediaCache.setObject(data as NSData, forKey: media.id as NSString, cost: data.count)
             return data
         } catch { return nil }
     }
