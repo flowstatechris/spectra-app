@@ -74,10 +74,18 @@ public final class Cuelume {
         #endif
     }
 
-    /// Background teardown is invisible to `engine.isRunning` (see the
-    /// `isWarm` doc above), so foreground resume must re-confirm warmth
-    /// itself rather than trust that property. iOS/tvOS only — macOS has no
-    /// background-audio-teardown equivalent to guard against.
+    /// Two distinct things can take the engine cold, and neither shows up
+    /// in `engine.isRunning` (see the `isWarm` doc above):
+    ///  - plain backgrounding (UIApplication lifecycle) — the case fix #2
+    ///    covered.
+    ///  - something else actively taking the audio session — a phone/
+    ///    FaceTime call, Siri, an alarm — which fires an AVAudioSession
+    ///    interruption and can happen while Spectra is still foregrounded
+    ///    (e.g. tapping a notification while already mid-FaceTime-call).
+    ///    Missing this is what let a second crash through: the app never
+    ///    saw a background/foreground transition at all, so fix #2's
+    ///    isWarm invalidation never ran. iOS/tvOS only — macOS has neither
+    ///    concept to guard against.
     private func observeLifecycle() {
         #if os(iOS) || os(tvOS)
         NotificationCenter.default.addObserver(
@@ -86,6 +94,42 @@ public final class Cuelume {
         NotificationCenter.default.addObserver(
             forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main
         ) { [weak self] _ in self?.startAndConfirmWarm() }
+        NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self,
+                  let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  let type = AVAudioSession.InterruptionType(rawValue: raw)
+            else { return }
+            switch type {
+            case .began: self.isWarm = false
+            case .ended: self.startAndConfirmWarm()
+            @unknown default: break
+            }
+        }
+        #endif
+    }
+
+    /// Non-nil only in tests: `secondaryAudioShouldBeSilencedHint` reflects
+    /// real system audio-route state and can't be forced true from a test
+    /// process without an actual concurrent call — this override is the
+    /// seam that makes shouldStayQuiet()'s branches testable anyway.
+    var _test_shouldStayQuietOverride: Bool?
+
+    /// Apple's own signal for "something more important owns audio right
+    /// now — a call, Siri, an alarm" (true for the entire duration of a
+    /// FaceTime/phone call, not just around the interruption edges). A
+    /// UI chime has no business fighting that: activating our own session
+    /// mid-call (even `.ambient`/`.mixWithOthers`) can audibly glitch the
+    /// call's own route, on top of racing straight back into the exact
+    /// IO-cycle crash this file exists to prevent. Skip everything —
+    /// don't even attempt engine.start() — while this is true.
+    private func shouldStayQuiet() -> Bool {
+        if let override = _test_shouldStayQuietOverride { return override }
+        #if os(iOS) || os(tvOS)
+        return AVAudioSession.sharedInstance().secondaryAudioShouldBeSilencedHint
+        #else
+        return false
         #endif
     }
 
@@ -94,6 +138,7 @@ public final class Cuelume {
     /// has actually rendered a buffer, which is the one true signal that
     /// AVAudioPlayerNode.play() is now safe to call.
     private func startAndConfirmWarm() {
+        guard !shouldStayQuiet() else { return }
         if !engine.isRunning { try? engine.start() }
         guard engine.isRunning else { return }
         let mixer = engine.mainMixerNode
@@ -110,18 +155,18 @@ public final class Cuelume {
 
     /// Plays a cue immediately. Overlap-safe; no-op when disabled.
     ///
-    /// Returns whether it actually scheduled a play. Cold cues (isWarm ==
-    /// false — freshly launched, or resuming from background where the
-    /// engine's IO was torn down invisibly to `engine.isRunning`) are
-    /// skipped rather than played: calling AVAudioPlayerNode.play() before
-    /// the engine has rendered a single real IO cycle throws an uncaught
-    /// NSException ("player did not see an IO cycle") that crashes the
-    /// whole app — reliably hit via a notification tap resuming straight
-    /// into a cue-playing event (approval/clarify/finish). See isWarm's doc
-    /// for why `engine.isRunning` alone isn't a safe enough check.
+    /// Returns whether it actually scheduled a play. Two things skip a
+    /// play rather than risk it: `shouldStayQuiet()` (a call/Siri/alarm
+    /// owns audio right now — don't fight it, don't even try to warm up),
+    /// and a cold `isWarm` (freshly launched, or resuming from background/
+    /// an interruption where the engine's IO was torn down invisibly to
+    /// `engine.isRunning`). Either miss let AVAudioPlayerNode.play() get
+    /// called before the engine had rendered a single real IO cycle —
+    /// an uncaught NSException ("player did not see an IO cycle") that
+    /// crashes the whole app, reliably hit via a notification tap.
     @discardableResult
     public func play(_ sound: Sound, volume perPlay: Float = 1) -> Bool {
-        guard isEnabled, volume * perPlay > 0 else { return false }
+        guard isEnabled, volume * perPlay > 0, !shouldStayQuiet() else { return false }
         guard isWarm else {
             startAndConfirmWarm()
             return false
@@ -149,6 +194,8 @@ public final class Cuelume {
     /// the real bug) must be able to go cold independent of engine.isRunning.
     func _test_invalidateWarm() { isWarm = false }
     var _test_isWarm: Bool { isWarm }
+    func _test_forceWarm() { isWarm = true }  // bypass startAndConfirmWarm's own shouldStayQuiet() gate for a test
+    func _test_triggerWarmUp() { startAndConfirmWarm() }  // direct access to exercise its own shouldStayQuiet() guard
 }
 
 // MARK: - Recipe model  (mirrors sounds/recipes.js)
