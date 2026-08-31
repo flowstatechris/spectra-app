@@ -54,7 +54,7 @@ struct BackendConfigView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Eyebrow("Backend")
                 TextField("", text: $urlText, prompt:
-                    Text("http://10.0.0.182:9119").foregroundStyle(Theme.muted.opacity(0.6)))
+                    Text("10.0.0.182:9119 or my-box.ts.net").foregroundStyle(Theme.muted.opacity(0.6)))
                     .font(Theme.mono(15))
                     .foregroundStyle(Theme.ink)
                     .keyboardType(.URL)
@@ -70,14 +70,7 @@ struct BackendConfigView: View {
             .padding(.horizontal, 28)
 
             Button("Connect") {
-                // Force a scheme BEFORE parsing: URLComponents reads a bare
-                // "10.0.0.182:9119" with the host as the scheme, so a
-                // scheme==nil check never fires and the URL comes out malformed.
-                var s = urlText.trimmingCharacters(in: .whitespaces)
-                if !s.lowercased().hasPrefix("http://") && !s.lowercased().hasPrefix("https://") {
-                    s = "http://" + s
-                }
-                guard let url = URLComponents(string: s)?.url, url.host != nil else { return }
+                guard let url = BackendURL.normalize(urlText) else { return }
                 Cuelume.shared.play(.press)
                 app.setBackend(url)
             }

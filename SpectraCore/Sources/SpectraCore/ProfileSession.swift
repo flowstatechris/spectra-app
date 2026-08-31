@@ -30,6 +30,15 @@ public final class ProfileSession: Identifiable {
     /// messages are already correct on screen and no loading UI is wanted.
     public private(set) var isSwitchingChat = false
 
+    /// Voice Mode taps the agent's text stream through these. They are an
+    /// *additional* consumer of the same deltas the timeline already folds —
+    /// nothing here replaces or reorders the existing `messages` append.
+    /// Nil in the ordinary text-only case, so the cost is one optional check.
+    public var onAgentDelta: ((String) -> Void)?
+    /// Reply finished — the voice pipeline flushes whatever half-sentence is
+    /// still buffered instead of holding it until the next turn.
+    public var onTurnEnd: (() -> Void)?
+
     private let rpc: HermesRPCConnection
     /// Id of the message currently being streamed (set on first token, cleared
     /// at message.complete). Views read it to render the live message as plain
@@ -117,6 +126,48 @@ public final class ProfileSession: Identifiable {
         pendingClarify = nil
         pendingAttachments = []     // staging died with the session
         status = .idle
+    }
+
+    /// Pull whatever the server recorded while nothing was listening.
+    ///
+    /// Backgrounding kills the socket, so a turn that finishes while Spectra is
+    /// away — exactly the turn that raises the push notification — is never
+    /// delivered as an event, and `ensureSession()` resumes with
+    /// `omit_messages`, so it never arrived on the next send either: the reply
+    /// simply wasn't in the thread. Reconnect is the one moment we know we may
+    /// have missed something, so rebind the runtime id here *with* messages and
+    /// append the tail we're short. (§11)
+    ///
+    /// A live `serverSessionID` means the socket carried the turn and there is
+    /// nothing to catch up on; mid-turn or mid-approval we leave the timeline
+    /// alone rather than splice under it.
+    public func resync() async {
+        guard serverSessionID == nil, !isRunning, pendingApproval == nil,
+              let stored = storedSessionID,
+              let r = try? await rpc.call("session.resume",
+                                          params: ["session_id": stored,
+                                                   "profile": profile.name])
+        else { return }
+        serverSessionID = r["session_id"] as? String
+        storedSessionID = (r["stored_session_id"] as? String) ?? stored
+        messages += Self.missingTail(local: messages,
+                                     server: Self.mapHistory(r["messages"]))
+    }
+
+    /// What the server holds beyond what we already show. Server history is
+    /// plain user/assistant text; the local timeline also carries status, tool,
+    /// approval and error rows Hermes doesn't return, so only the `.plain` rows
+    /// are comparable.
+    ///
+    /// ponytail: positional count, not id or text matching — Hermes returns no
+    /// message ids, and local agent text is post-processed (`AgentMedia.parse`
+    /// strips media out of it), so there is nothing stable to match on. If the
+    /// counts ever drift the tail just isn't appended, which is today's
+    /// behaviour; it can't reorder or duplicate the thread.
+    nonisolated static func missingTail(local: [Message], server: [Message]) -> [Message] {
+        let shown = local.lazy.filter { $0.kind == .plain }.count
+        guard server.count > shown else { return [] }
+        return Array(server.suffix(server.count - shown))
     }
 
     // MARK: Session switching (handoff §2b)
@@ -281,7 +332,11 @@ public final class ProfileSession: Identifiable {
     public func clearPendingAttachments() { pendingAttachments = [] }
     public func noteError(_ text: String) { recordError(text) }
 
-    public func send(_ text: String) async {
+    /// `interrupted: true` latches Hermes' speech-interruption flag for this turn
+    /// (`prompt.submit` → `mark_speech_interrupted()`), so the model is told the
+    /// user talked over its previous reply. Only Voice Mode's barge-in sets it;
+    /// typed sends keep the default and are unaffected.
+    public func send(_ text: String, interrupted: Bool = false) async {
         guard pendingApproval == nil else { return }  // hard block at model layer
         // Attachments already staged server-side (image.attach / file.attach);
         // ride their references on this message. Images carry a nil reference
@@ -295,8 +350,9 @@ public final class ProfileSession: Identifiable {
             pendingAttachments = []
             let submittedText = (attachments.compactMap(\.reference) + [text.isEmpty ? nil : text])
                 .compactMap { $0 }.joined(separator: "\n\n")
-            _ = try await rpc.call("prompt.submit", params: ["session_id": sid,
-                                                              "text": submittedText])
+            var params: [String: Any] = ["session_id": sid, "text": submittedText]
+            if interrupted { params["interrupted"] = true }
+            _ = try await rpc.call("prompt.submit", params: params)
             turnDidBloom = false        // arm the bloom cue for this turn
             status = .thinking(search: false)
         } catch {
@@ -391,6 +447,7 @@ public final class ProfileSession: Identifiable {
         case "message.delta":
             guard let text = event.payload?["text"] as? String else { return }
             appendToStreamingMessage(text)
+            onAgentDelta?(text)
             status = .speaking
 
         case "message.complete":
@@ -407,6 +464,7 @@ public final class ProfileSession: Identifiable {
                 }
             }
             streamingMessageID = nil
+            onTurnEnd?()
             if pendingApproval == nil {
                 status = .idle
                 Cuelume.shared.play(.scan)   // response finished
@@ -477,6 +535,7 @@ public final class ProfileSession: Identifiable {
             recordError(error)
 
         case "turn.end":
+            onTurnEnd?()
             if streamingMessageID == nil, pendingApproval == nil { status = .idle }
 
         case "session.reclaimed":

@@ -64,4 +64,39 @@ final class SessionSwitchTests: XCTestCase {
         XCTAssertEqual(ProfileSession.reconcile(cached: nil, server: server), server)
         XCTAssertEqual(ProfileSession.reconcile(cached: [], server: server), server)
     }
+
+    // MARK: missingTail (§11 — catching up after a backgrounded socket drop)
+
+    /// The reply that raised the push landed while the socket was dead: the
+    /// server has one assistant turn we never saw. Append only that, keeping
+    /// the local tool row above it.
+    func testMissingTailAppendsReplyMissedWhileBackgrounded() {
+        let server = ProfileSession.mapHistory([
+            ["role": "user", "text": "run ls"],
+            ["role": "assistant", "text": "done"],
+            ["role": "assistant", "text": "and here's the summary"],
+        ])
+        let tail = ProfileSession.missingTail(local: rich(), server: server)
+        XCTAssertEqual(tail.map(\.text), ["and here's the summary"])
+    }
+
+    /// Nothing was missed — the tail must be empty, never a re-append of rows
+    /// already on screen.
+    func testMissingTailEmptyWhenCaughtUp() {
+        let server = ProfileSession.mapHistory([
+            ["role": "user", "text": "run ls"],
+            ["role": "assistant", "text": "done"],
+        ])
+        XCTAssertTrue(ProfileSession.missingTail(local: rich(), server: server).isEmpty)
+    }
+
+    /// Non-plain rows (tool/status/approval) aren't in server history, so they
+    /// must not count against it — otherwise a thread with tool rows would
+    /// look ahead of the server and never catch up.
+    func testMissingTailIgnoresNonPlainRows() {
+        let server = ProfileSession.mapHistory([["role": "user", "text": "run ls"]])
+        XCTAssertTrue(ProfileSession.missingTail(local: rich(), server: server).isEmpty)
+        XCTAssertEqual(
+            ProfileSession.missingTail(local: [], server: server).map(\.text), ["run ls"])
+    }
 }

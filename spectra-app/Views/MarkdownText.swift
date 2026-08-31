@@ -84,7 +84,32 @@ private final class MarkdownCache {
 /// RenderedBlock.render) and cached, so scrolling through long threads is smooth.
 struct MarkdownText: View {
     let text: String
-    @State private var blocks: [RenderedBlock] = []
+    @State private var blocks: [RenderedBlock]
+
+    /// A row has to mount at its real height. `.task` — even on a cache hit —
+    /// runs only *after* the first layout pass, so every agent row was measured
+    /// empty and then jumped to full height a frame later. Invisible at the
+    /// bottom of a thread, but scrolling up re-mounts row after row, and each
+    /// one resizing the content above the viewport is what made the scroll
+    /// skip. So resolve synchronously here; `.task` below still covers the
+    /// cases this can't (long texts, and `text` changing under a live row).
+    @MainActor init(text: String) {
+        self.text = text
+        _blocks = State(initialValue: Self.resolve(text))
+    }
+
+    /// ponytail: past this a message mounts empty for one frame, as before —
+    /// better than parsing it on the main thread mid-drag. Raise it if a real
+    /// reply is seen to land short.
+    private static let syncParseLimit = 4096
+
+    @MainActor private static func resolve(_ text: String) -> [RenderedBlock] {
+        if let cached = MarkdownCache.shared.get(text) { return cached }
+        guard text.utf8.count <= syncParseLimit else { return [] }
+        let rendered = RenderedBlock.render(text)
+        MarkdownCache.shared.set(text, rendered)
+        return rendered
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {

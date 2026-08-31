@@ -23,6 +23,7 @@ struct ChatView: View {
     @State private var showingStatusTransition = false
     @State private var collapsedApprovalID: String?
     @State private var showingSessions = false
+    @State private var showingVoiceMode = false
     @State private var highlightedMessageID: String?   // brief deep-link flash
 
     var body: some View {
@@ -311,7 +312,41 @@ struct ChatView: View {
             .onChange(of: app.chatScrollTargetID) {
                 scrollToActivity(in: session, proxy: proxy)
             }
+            // Scrolled away from the live end — offer the way back. Landing at
+            // the bottom re-arms auto-follow on its own, via isPinnedToBottom.
+            .overlay(alignment: .bottom) {
+                if !isPinnedToBottom {
+                    jumpToBottom(session, proxy: proxy)
+                }
+            }
+            .animation(.snappy, value: isPinnedToBottom)
         }
+    }
+
+    private func jumpToBottom(_ session: ProfileSession, proxy: ScrollViewProxy) -> some View {
+        Button {
+            // The placeholder sits below the last message while a turn is
+            // starting, so it — not the message — is the true bottom.
+            let target = awaitingFirstOutput(session)
+                ? Self.placeholderID : session.messages.last?.id
+            guard let target else { return }
+            withAnimation(.easeOut(duration: 0.25)) {
+                proxy.scrollTo(target, anchor: .bottom)
+            }
+        } label: {
+            // Dark Liquid Glass, not Theme.ink on a material: the chip stays
+            // the same smoked disc in both appearances, so the arrow is white
+            // in both rather than following the ink token.
+            Image(systemName: "arrow.down")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 38, height: 38)
+                .glassEffect(.regular.tint(.black.opacity(0.30)).interactive(),
+                             in: .circle)
+        }
+        .padding(.bottom, 12)
+        .transition(.scale(scale: 0.8).combined(with: .opacity))
+        .accessibilityLabel("Jump to latest")
     }
 
     private static let placeholderID = "thinking-placeholder"
@@ -451,6 +486,20 @@ struct ChatView: View {
                     .accessibilityIdentifier("stopButton")
                     .disabled(stopping)
                     .transition(.scale.combined(with: .opacity))
+                } else if !canSend(session) && session.canSend {
+                    Button {
+                        Cuelume.shared.play(.press)
+                        showingVoiceMode = true
+                    } label: {
+                        Image(systemName: "waveform")
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundStyle(Theme.paper)
+                            .frame(width: 40, height: 40)
+                            .background(Theme.accent, in: Circle())
+                    }
+                    .accessibilityLabel("Voice Mode")
+                    .accessibilityIdentifier("voiceModeButton")
+                    .transition(.scale.combined(with: .opacity))
                 } else {
                     Button {
                         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -495,6 +544,9 @@ struct ChatView: View {
         }
         .photosPicker(isPresented: $showingPhotoLibrary, selection: $pickerItems,
                       maxSelectionCount: 4, matching: .images)
+        .fullScreenCover(isPresented: $showingVoiceMode) {
+            VoiceModeView(session: session, connectionState: app.connectionState)
+        }
         .sheet(isPresented: $showingCamera) {
             CameraPicker { image in
                 // Encode once here (the picker already handed us a decoded image),

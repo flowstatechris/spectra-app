@@ -185,6 +185,34 @@ public final class Cuelume {
     /// Optional: pre-render everything up front to avoid a first-play hitch.
     public func warmUp() { for s in Sound.allCases { play(s, volume: 0) } }
 
+    /// Yield the audio session to something that needs exclusive use of it —
+    /// today that is Voice Mode, which takes `.playAndRecord`/`.voiceChat` for
+    /// hardware echo cancellation. UI cues stay silent for the duration: they
+    /// would be heard by the mic and barge the agent in on itself.
+    ///
+    /// This is the *fourth* way the engine goes cold (see the `isWarm` doc
+    /// above), and it is the only one iOS gives us no notification for — the
+    /// category change is our own doing. So warmth is invalidated on both
+    /// edges: on entry because our IO is about to be torn down under us, and on
+    /// exit because the session we come back to is not the one we left.
+    /// `resume()` deliberately does not force `isEnabled = true`; it restores
+    /// whatever was in effect before, so the XCTest silence guard in `init()`
+    /// (and any future user setting) survives a round trip.
+    public func suspendForExclusiveAudio() {
+        wasEnabledBeforeSuspend = isEnabled
+        isEnabled = false
+        isWarm = false
+    }
+
+    public func resumeAfterExclusiveAudio() {
+        isEnabled = wasEnabledBeforeSuspend ?? isEnabled
+        wasEnabledBeforeSuspend = nil
+        isWarm = false
+        startAndConfirmWarm()
+    }
+
+    private var wasEnabledBeforeSuspend: Bool?
+
     // MARK: - Test-only hooks (internal: visible to @testable import only)
 
     /// Forces isWarm false directly, without touching the engine — this is

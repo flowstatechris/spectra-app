@@ -174,10 +174,7 @@ public final class AppState {
             if intentionalDisconnect { return }
             do {
                 try await rpc.connect()
-                // Server reaped the runtime sessions on the drop. Clear the dead
-                // runtime ids (cached messages + durable ids stay); the next send
-                // resumes each durable conversation rather than forking a new one.
-                for s in sessions.values { s.resetForReconnect() }
+                await rebindSessions()
                 try? await loadProfiles()
                 connectionError = nil
                 return
@@ -350,6 +347,21 @@ public final class AppState {
         } catch { return nil }
     }
 
+    /// Synthesise one sentence of speech through Hermes' TTS provider chain
+    /// (ElevenLabs, per `tts.provider` in the backend's config.yaml).
+    ///
+    /// Returns nil rather than throwing: Voice Mode falls back to the on-device
+    /// synthesiser when this fails, so a network hiccup costs voice quality
+    /// rather than the reply. Deliberately uncached — sentences are one-shot
+    /// and caching them would pin whole conversations of audio in memory.
+    public func synthesizeSpeech(_ text: String) async -> Data? {
+        guard let auth, let backend else { return nil }
+        do {
+            let token = try await auth.validAccessToken()
+            return try await SpeechFetch.audio(text: text, baseURL: backend.baseURL, token: token)
+        } catch { return nil }
+    }
+
     /// Register this device's APNs token with Hermes (§11). Best-effort — the
     /// token is cached so we can re-post after login or on refresh. Server keys
     /// pushes to the authed user, so only the token + environment are needed.
@@ -377,10 +389,27 @@ public final class AppState {
     public func refreshAll() async {
         guard let rpc else { return }
         if await rpc.state == .disconnected {
-            try? await rpc.connect()
+            guard (try? await rpc.connect()) != nil else { return }
+            await rebindSessions()
         }
         try? await loadProfiles()   // additive re-sync; never removes added profiles
         await postAPNsToken()       // re-register device token on foreground (§11)
+    }
+
+    /// The socket just came back. The server reaped the *runtime* sessions on
+    /// the drop, so clear the dead runtime ids (cached messages + durable ids
+    /// stay) — the next send resumes each durable conversation rather than
+    /// forking a new one — then pull whatever landed while we weren't
+    /// listening, which is how a reply that arrived during backgrounding
+    /// reaches the thread the notification points at (§11).
+    ///
+    /// ponytail: every session, not just the active one. A tapped push can
+    /// change the active profile moments after this runs, and n is the handful
+    /// of profiles the user added.
+    private func rebindSessions() async {
+        for s in sessions.values { s.resetForReconnect() }
+        for s in sessions.values { await s.resync() }
+        persist()
     }
 
     // MARK: Event routing
