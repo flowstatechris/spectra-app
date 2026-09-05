@@ -124,10 +124,21 @@ public final class Cuelume {
     /// call's own route, on top of racing straight back into the exact
     /// IO-cycle crash this file exists to prevent. Skip everything —
     /// don't even attempt engine.start() — while this is true.
+    ///
+    /// `secondaryAudioShouldBeSilencedHint` alone isn't enough: it reflects
+    /// *our* session's live route state, so it can read stale/false right
+    /// after backgrounding, before `startAndConfirmWarm()` has reactivated
+    /// us — which let a cue slip through, force-reactivate the engine, and
+    /// that reactivation was audibly stepping on Music/Spotify (reported as
+    /// "a sound effect stops my music"). `isOtherAudioPlaying` is Apple's
+    /// direct, always-live "is something else playing audio right now"
+    /// check — true regardless of whether our own session is active — so
+    /// pairing it in closes that gap.
     private func shouldStayQuiet() -> Bool {
         if let override = _test_shouldStayQuietOverride { return override }
         #if os(iOS) || os(tvOS)
-        return AVAudioSession.sharedInstance().secondaryAudioShouldBeSilencedHint
+        let s = AVAudioSession.sharedInstance()
+        return s.isOtherAudioPlaying || s.secondaryAudioShouldBeSilencedHint
         #else
         return false
         #endif
