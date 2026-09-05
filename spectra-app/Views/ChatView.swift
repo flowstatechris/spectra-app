@@ -644,7 +644,7 @@ private struct UserAttachmentBubble: View {
                 .onTapGesture { showFull = true }
                 .accessibilityLabel("Attached image \(attachment.name). Tap to view full screen.")
                 .fullScreenCover(isPresented: $showFull) {
-                    ImageViewer(data: attachment.thumbnailJPEG)
+                    ImageViewer(image: img)   // reuse the decode, don't make a second one
                 }
         } else {
             HStack(spacing: 10) {
@@ -690,6 +690,7 @@ enum ThreadItem: Identifiable {
 func pinAnswersToTurnEnd(_ messages: [SpectraCore.Message]) -> [SpectraCore.Message] {
     var out: [SpectraCore.Message] = []
     var turn: [SpectraCore.Message] = []
+    out.reserveCapacity(messages.count)
 
     func flushTurn() {
         if let i = turn.lastIndex(where: { $0.role == .agent && $0.kind == .plain }),
@@ -729,6 +730,7 @@ func threadItems(_ messages: [SpectraCore.Message]) -> [ThreadItem] {
     var items: [ThreadItem] = []
     var status: [SpectraCore.Message] = []
     var tools: [SpectraCore.Message] = []
+    items.reserveCapacity(messages.count)
 
     func flushStatus(live: Bool) {
         guard let first = status.first else { return }
@@ -1577,16 +1579,19 @@ struct ClarifyCard: View {
     }
 }
 
-/// Full-screen image viewer (§9: tap thumbnail → view full-screen). Renders the
-/// locally-held JPEG; the server-side original isn't fetchable over the wire.
+/// Full-screen image viewer (§9: tap thumbnail → view full-screen). Takes an
+/// image the caller already decoded; the server-side original isn't fetchable
+/// over the wire.
 private struct ImageViewer: View {
-    let data: Data
+    /// Already decoded at the size it will be drawn — decoding here would put a
+    /// full-resolution bitmap on the main thread as the cover animates in.
+    let image: UIImage?
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Color.black.ignoresSafeArea()
-            if let img = UIImage(data: data) {
-                Image(uiImage: img).resizable().scaledToFit().ignoresSafeArea()
+            if let image {
+                Image(uiImage: image).resizable().scaledToFit().ignoresSafeArea()
             }
             Button { dismiss() } label: {
                 Image(systemName: "xmark.circle.fill")
@@ -1603,32 +1608,72 @@ private struct ImageViewer: View {
 private struct AgentMediaView: View {
     let media: SpectraCore.Message.ReceivedMedia
     @Environment(AppState.self) private var app
-    @State private var data: Data?
+    /// Display-sized images, never the original bytes. Raw `Data` in `@State`
+    /// is pinned for as long as the row is realized — memory the bounded
+    /// AppState media cache has no way to reclaim — and `UIImage(data:)` in a
+    /// body decodes at *source* resolution, so a large agent screenshot cost
+    /// tens of megabytes of bitmap to fill a 260pt box.
+    @State private var inline: UIImage?
+    @State private var full: UIImage?
     @State private var failed = false
     @State private var showFull = false
     @State private var shareURL: URL?
+
+    private static let inlineMaxPixels: CGFloat = 780    // 260pt at 3x
+    private static let fullMaxPixels: CGFloat = 2400     // full screen, still not source res
 
     var body: some View {
         if media.isImage {
             imageBody
                 .task(id: media.id) {
-                    data = await app.fetchAgentMedia(media)
-                    failed = data == nil
+                    guard let data = await app.fetchAgentMedia(media) else {
+                        failed = true
+                        return
+                    }
+                    inline = await Self.decode(data, maxDim: Self.inlineMaxPixels)
+                    failed = inline == nil
                 }
         } else {
             fileCard
         }
     }
 
+    private static func decode(_ data: Data, maxDim: CGFloat) async -> UIImage? {
+        await Task.detached(priority: .userInitiated) {
+            Downsample.image(data, maxDim: maxDim)
+        }.value
+    }
+
     @ViewBuilder private var imageBody: some View {
-        if let data, let img = UIImage(data: data) {
+        if let inline {
             VStack(alignment: .leading, spacing: 4) {
-                Image(uiImage: img).resizable().scaledToFit()
+                Image(uiImage: inline).resizable().scaledToFit()
                     .frame(maxWidth: 260, maxHeight: 260)
                     .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
                     .onTapGesture { showFull = true }
                     .accessibilityLabel("Image \(media.name). Tap to view full screen.")
-                    .fullScreenCover(isPresented: $showFull) { ImageViewer(data: data) }
+                    // Opens instantly on the inline copy and sharpens when the
+                    // bigger decode lands; the bytes come back from the cache.
+                    .fullScreenCover(isPresented: $showFull) {
+                        ImageViewer(image: full ?? inline)
+                            .task {
+                                guard full == nil,
+                                      let data = await app.fetchAgentMedia(media) else { return }
+                                full = await Self.decode(data, maxDim: Self.fullMaxPixels)
+                            }
+                    }
+                    // The full-screen decode is the largest thing this row ever
+                    // holds; don't keep it alive behind a closed cover. Release
+                    // it *after* the dismiss animation — dropping it on the
+                    // first frame swaps the visible image back to the inline
+                    // copy mid-transition, which reads as a blur pop.
+                    .onChange(of: showFull) { _, open in
+                        guard !open else { return }
+                        Task {
+                            try? await Task.sleep(for: .milliseconds(400))
+                            if !showFull { full = nil }
+                        }
+                    }
                 if let cap = media.caption {
                     Text(cap).font(Theme.mono(11)).foregroundStyle(Theme.muted)
                 }
@@ -1647,8 +1692,7 @@ private struct AgentMediaView: View {
     private var fileCard: some View {
         Button {
             Task {
-                if data == nil { data = await app.fetchAgentMedia(media) }
-                guard let data else { failed = true; return }
+                guard let data = await app.fetchAgentMedia(media) else { failed = true; return }
                 let url = FileManager.default.temporaryDirectory.appendingPathComponent(media.name)
                 try? data.write(to: url)
                 shareURL = url
@@ -1772,7 +1816,11 @@ extension URL: @retroactive Identifiable { public var id: String { absoluteStrin
 /// requested pixel size, so peak stays proportional to the *output*.
 enum Downsample {
     /// Longest side ≤ maxDim pixels, JPEG-encoded. Empty Data if undecodable.
-    static func jpeg(_ data: Data, maxDim: CGFloat, quality: CGFloat) -> Data {
+    ///
+    /// `nonisolated` is load-bearing: the project defaults to MainActor
+    /// isolation, so without it the `Task.detached` call sites hopped straight
+    /// back to the main actor and resized a full-size photo there.
+    nonisolated static func jpeg(_ data: Data, maxDim: CGFloat, quality: CGFloat) -> Data {
         guard let source = CGImageSourceCreateWithData(
                 data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
               let thumb = CGImageSourceCreateThumbnailAtIndex(source, 0, [
@@ -1783,6 +1831,25 @@ enum Downsample {
               ] as CFDictionary)
         else { return Data() }
         return UIImage(cgImage: thumb).jpegData(compressionQuality: quality) ?? Data()
+    }
+
+    /// Decode straight to a display-sized `UIImage`, no JPEG round-trip.
+    ///
+    /// `UIImage(data:)` keeps the image at its *source* resolution, so a
+    /// 4000x3000 agent screenshot shown in a 260pt box still decodes to a
+    /// ~48MB bitmap. Handing ImageIO the target size makes it decode only the
+    /// pixels that will be drawn.
+    nonisolated static func image(_ data: Data, maxDim: CGFloat) -> UIImage? {
+        guard let source = CGImageSourceCreateWithData(
+                data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+              let thumb = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceShouldCacheImmediately: true,   // decode here, not on the render pass
+                kCGImageSourceThumbnailMaxPixelSize: maxDim,
+              ] as CFDictionary)
+        else { return nil }
+        return UIImage(cgImage: thumb)
     }
 }
 

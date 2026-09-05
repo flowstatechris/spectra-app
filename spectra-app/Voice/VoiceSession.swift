@@ -181,7 +181,7 @@ final class VoiceSession {
     private func configureAudioSession() throws {
         let s = AVAudioSession.sharedInstance()
         try s.setCategory(.playAndRecord, mode: .voiceChat,
-                          options: [.defaultToSpeaker, .allowBluetooth])
+                          options: [.defaultToSpeaker, .allowBluetoothHFP])
         try s.setActive(true)
     }
 
