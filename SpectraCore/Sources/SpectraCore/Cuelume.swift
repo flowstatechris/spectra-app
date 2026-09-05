@@ -54,13 +54,22 @@ public final class Cuelume {
         if NSClassFromString("XCTestCase") != nil { isEnabled = false }
         format = AVAudioFormat(commonFormat: .pcmFormatFloat32,
                                sampleRate: sampleRate, channels: 1, interleaved: false)!
+        // Category FIRST, before the graph below touches `mainMixerNode`.
+        // Reading that property instantiates the engine's output audio unit and
+        // configures the hardware route, and the session's category at rest is
+        // `.soloAmbient` — which is *non-mixing*, so doing it in the other order
+        // interrupted whatever else was playing. That was the real "a sound
+        // effect stops my music": the interruption came from building the graph
+        // under the default category, not from the cue. It also defeated the
+        // shouldStayQuiet() gate, which by then saw `isOtherAudioPlaying` false
+        // (we had just silenced them) and let the cue through.
+        configureSession()
         for _ in 0..<12 {                     // voice pool → overlapping cues
             let node = AVAudioPlayerNode()
             engine.attach(node)
             engine.connect(node, to: engine.mainMixerNode, format: format)
             voices.append(node)
         }
-        configureSession()
         startAndConfirmWarm()
         observeLifecycle()
     }
