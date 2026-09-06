@@ -58,6 +58,15 @@ struct ChatView: View {
                 SessionSwitcherView(session: session)
             }
         }
+        .alert("Continue here?", isPresented: Binding(
+            get: { app.activeSession?.pendingTakeover != nil },
+            set: { if !$0 { app.activeSession?.cancelTakeover() } }
+        ), presenting: app.activeSession?.pendingTakeover) { _ in
+            Button("Continue Here") { Task { await app.activeSession?.confirmTakeover() } }
+            Button("Cancel", role: .cancel) { app.activeSession?.cancelTakeover() }
+        } message: { prompt in
+            Text(prompt.detail)
+        }
         .animation(.snappy, value: compactHeader)
         .animation(.snappy, value: app.activeSession?.pendingApproval)
         .animation(.snappy, value: app.activeSession?.pendingClarify)

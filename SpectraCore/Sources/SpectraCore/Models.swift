@@ -224,6 +224,16 @@ public struct ApprovalRequest: Identifiable, Sendable, Equatable, Codable {
     }
 }
 
+/// Shown when send() hits `SESSION_NOT_OWNED` — another device already holds
+/// this stored session's lease. `detail` is the server's human-readable
+/// "already has a live owner…" message. Confirming calls `session.takeover`,
+/// which evicts that device (interrupting its turn first, if any) and lets
+/// the send retry. (#1: multi-device handoff)
+public struct TakeoverPrompt: Identifiable, Sendable, Equatable {
+    public let id = UUID()
+    public let detail: String
+}
+
 /// Durable state for an approval card at its chronological position in Chat.
 public struct ApprovalEvent: Identifiable, Sendable, Equatable, Codable {
     public enum State: Sendable, Equatable, Codable {

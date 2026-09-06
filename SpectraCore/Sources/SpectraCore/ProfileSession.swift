@@ -14,6 +14,10 @@ public final class ProfileSession: Identifiable {
     public private(set) var status: SessionStatus = .idle
     public private(set) var pendingApproval: ApprovalRequest?   // hard block on send()
     public private(set) var pendingClarify: ClarifyRequest?     // soft — thread stays live
+    /// Set when send() hits SESSION_NOT_OWNED (#1: multi-device handoff).
+    /// `confirmTakeover()`/`cancelTakeover()` resolve it.
+    public private(set) var pendingTakeover: TakeoverPrompt?
+    private var takeoverRetry: (params: [String: Any], userMessageID: String)?
     public private(set) var serverSessionID: String?
     /// Durable Hermes session key (`stored_session_id`). Unlike the runtime
     /// `serverSessionID` (reaped on ws disconnect), this survives reconnects and
@@ -347,17 +351,75 @@ public final class ProfileSession: Identifiable {
             try await ensureSession()
             guard let sid = serverSessionID else { return }
             messages.append(Message(role: .user, text: text, attachments: attachments))
+            let userMessageID = messages[messages.count - 1].id
             pendingAttachments = []
             let submittedText = (attachments.compactMap(\.reference) + [text.isEmpty ? nil : text])
                 .compactMap { $0 }.joined(separator: "\n\n")
             var params: [String: Any] = ["session_id": sid, "text": submittedText]
             if interrupted { params["interrupted"] = true }
-            _ = try await rpc.call("prompt.submit", params: params)
-            turnDidBloom = false        // arm the bloom cue for this turn
-            status = .thinking(search: false)
+            try await submitPrompt(params: params, userMessageID: userMessageID)
         } catch {
             recordError("Couldn't send message: \(error)")
         }
+    }
+
+    /// `prompt.submit`, with the one recoverable failure — another device
+    /// still holds this stored session's lease — turned into a confirm
+    /// prompt instead of a raw error (#1: multi-device handoff).
+    private func submitPrompt(params: [String: Any], userMessageID: String) async throws {
+        do {
+            _ = try await rpc.call("prompt.submit", params: params)
+            turnDidBloom = false        // arm the bloom cue for this turn
+            status = .thinking(search: false)
+        } catch HermesRPCConnection.RPCError.serverError(_, let message, "SESSION_NOT_OWNED") {
+            takeoverRetry = (params, userMessageID)
+            pendingTakeover = TakeoverPrompt(detail: message)
+        }
+    }
+
+    /// User confirmed "continue here?" — evict the other device's lease and
+    /// retry the send it displaced.
+    @discardableResult
+    public func confirmTakeover() async -> Bool {
+        guard let retry = takeoverRetry, let stored = storedSessionID else {
+            pendingTakeover = nil
+            return false
+        }
+        pendingTakeover = nil
+        takeoverRetry = nil
+        do {
+            _ = try await rpc.call("session.takeover", params: [
+                "session_id": stored,
+                "surface": Self.platformSurfaceName,
+            ])
+            try await submitPrompt(params: retry.params, userMessageID: retry.userMessageID)
+            return true
+        } catch {
+            if let idx = messages.firstIndex(where: { $0.id == retry.userMessageID }) {
+                messages.remove(at: idx)
+            }
+            recordError("Couldn't continue here: \(error)")
+            return false
+        }
+    }
+
+    /// User declined the takeover — drop the message that never sent.
+    public func cancelTakeover() {
+        pendingTakeover = nil
+        if let retry = takeoverRetry, let idx = messages.firstIndex(where: { $0.id == retry.userMessageID }) {
+            messages.remove(at: idx)
+        }
+        takeoverRetry = nil
+    }
+
+    private static var platformSurfaceName: String {
+        #if os(iOS)
+        return "iPhone"
+        #elseif os(macOS)
+        return "Mac"
+        #else
+        return "device"
+        #endif
     }
 
     @discardableResult
@@ -537,6 +599,15 @@ public final class ProfileSession: Identifiable {
         case "turn.end":
             onTurnEnd?()
             if streamingMessageID == nil, pendingApproval == nil { status = .idle }
+
+        case "session.taken_over":
+            // Another device called session.takeover on this same stored
+            // session (#1: multi-device handoff) — it now owns the lease.
+            // Same teardown as session.reclaimed; a status line explains why
+            // this thread suddenly went quiet instead of leaving it a mystery.
+            let by = event.payload?["by"] as? String ?? "another device"
+            messages.append(Message(role: .agent, text: "Continued on \(by).", kind: .status))
+            resetForReconnect()
 
         case "session.reclaimed":
             // Server reaped our runtime session (idle_timeout / lru_evict /

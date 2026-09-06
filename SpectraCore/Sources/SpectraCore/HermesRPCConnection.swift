@@ -23,7 +23,10 @@ public actor HermesRPCConnection {
 
     public enum RPCError: Error {
         case notConnected
-        case serverError(code: Int, message: String)
+        /// `reason` is the server's machine-readable `error.data.reason` (e.g.
+        /// `SESSION_NOT_OWNED`), when it sent one — the message text alone
+        /// isn't safe to branch on since wording can change (see #1).
+        case serverError(code: Int, message: String, reason: String? = nil)
         case malformedResponse
         case timeout
     }
@@ -150,9 +153,11 @@ public actor HermesRPCConnection {
 
         if let id = obj["id"] as? Int, let cont = pending.removeValue(forKey: id) {
             if let err = obj["error"] as? [String: Any] {
+                let data = err["data"] as? [String: Any]
                 cont.resume(throwing: RPCError.serverError(
                     code: err["code"] as? Int ?? -1,
-                    message: err["message"] as? String ?? "unknown"))
+                    message: err["message"] as? String ?? "unknown",
+                    reason: data?["reason"] as? String))
             } else if let result = obj["result"] as? [String: Any] {
                 cont.resume(returning: result)
             } else {
