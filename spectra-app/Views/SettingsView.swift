@@ -62,7 +62,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             Eyebrow("About")
             row("Version", Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")
-            Link(destination: URL(string: "https://github.com")!) {
+            Link(destination: URL(string: "https://github.com/flowstatechris/spectra-app")!) {
                 HStack {
                     Text("GitHub").font(Theme.mono(13)).foregroundStyle(Theme.accent)
                     Spacer()
